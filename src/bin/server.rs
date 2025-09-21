@@ -1,4 +1,7 @@
 use clap::Parser;
+
+use snarf::management;
+
 use snix_castore::utils::ServiceUrlsGrpc;
 use tracing::info;
 
@@ -14,6 +17,7 @@ struct Arguments {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Add some logging for the moment
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // use RUST_LOG or fallback
         .init();
@@ -24,6 +28,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
         .await?;
 
+    let management_routes = management::routes(
+        blob_service.clone(),
+        directory_service.clone(),
+        path_info_service.clone(),
+        nar_calculation_service,
+    );
+
     let state = nar_bridge::AppState::new(
         blob_service.clone(),
         directory_service.clone(),
@@ -31,29 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::num::NonZero::new(64usize).unwrap(),
     );
 
-    let router = tonic::service::Routes::new(
-        snix_castore::proto::blob_service_server::BlobServiceServer::new(
-            snix_castore::proto::GRPCBlobServiceWrapper::new(blob_service),
-        ),
-    )
-    .add_service(
-        snix_castore::proto::directory_service_server::DirectoryServiceServer::new(
-            snix_castore::proto::GRPCDirectoryServiceWrapper::new(directory_service),
-        ),
-    )
-    .add_service(
-        snix_store::proto::path_info_service_server::PathInfoServiceServer::new(
-            snix_store::proto::GRPCPathInfoServiceWrapper::new(
-                path_info_service,
-                nar_calculation_service,
-            ),
-        ),
-    );
-
     // HTTP
     let app = nar_bridge::gen_router(30)
         .with_state(state)
-        .merge(router.into_axum_router());
+        .merge(management_routes.into_axum_router());
 
     let listen_address = &arguments.listen_args.listen_address.unwrap_or_else(|| {
         "[::]:9000"
