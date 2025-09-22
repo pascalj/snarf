@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
         .await?;
 
-    let management_routes = management::routes(
+    let management_routes = management::server_routes(
         blob_service.clone(),
         directory_service.clone(),
         path_info_service.clone(),
