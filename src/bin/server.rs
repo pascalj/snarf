@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use clap::Parser;
 
 use snarf::management;
@@ -27,6 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             std::iter::empty::<&str>(),
         ))
         .await?;
+
+    match crate::management::generate_token() {
+        Ok(token) => println!("Client token: {}", token),
+        Err(err) => println!(
+            "Failed to create client token: {}",
+            err.source().expect("foo").to_string()
+        ),
+    }
 
     let management_routes = management::server_routes(
         blob_service.clone(),

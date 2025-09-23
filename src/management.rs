@@ -4,6 +4,29 @@ use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService}
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 use url::Url;
 
+use rusty_paseto::prelude::*;
+
+pub fn generate_token() -> Result<String, GenericBuilderError> {
+    let raw_private_key = Key::<64>::try_from(
+        // TODO: obviously replace with an runtime value.
+        // Generated using:
+        // 
+        // openssl genpkey -algorithm ED25519 -out private_key.pem
+        // set privhex (openssl pkey -in private_key.pem -text -noout | awk '/priv:/{flag=1;next}/pub:/{flag=0}flag' | tr -d ' :\n')
+        // set pubhex  (openssl pkey -in private_key.pem -text -noout | awk '/pub:/{flag=1;next}flag' | tr -d ' :\n')
+        // printf "%s" "$privhex$pubhex" | xxd -r -p > key64.bin
+        // xxd  -c 64 -p key64.bin
+        "4b8cfc546c8bbf4ed9ddaa579474d07375fd5f3d7cc71224a312ae833b99fea1232b2682925597b53d94d42794df1f88fab558ae76ca1b76c5538e25c162b57f",
+    ).expect("expect");
+    let private_key = PasetoAsymmetricPrivateKey::<V4, Public>::from(&raw_private_key);
+
+    let token = GenericBuilder::<V4, Public>::default()
+        .set_claim(SubjectClaim::from("manage cache"))
+        .try_sign(&private_key)?;
+
+    Ok(token)
+}
+
 /// Check the authentication. Dummy implementation, this will be replaced with
 /// PASETO.
 fn check_auth(req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
