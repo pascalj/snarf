@@ -30,7 +30,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
         .await?;
 
-    match crate::management::generate_token() {
+    let paseto_state = crate::management::PasetoState::default();
+    match paseto_state.public_token() {
         Ok(token) => println!("Client token: {}", token),
         Err(err) => println!(
             "Failed to create client token: {}",
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let management_routes = management::server_routes(
+        &paseto_state,
         blob_service.clone(),
         directory_service.clone(),
         path_info_service.clone(),

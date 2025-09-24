@@ -40,6 +40,9 @@ enum ClientCommand {
 /// CLI arguments for the client
 #[derive(Parser)]
 struct ClientCli {
+    /// The authentication token
+    #[arg(short, long)]
+    token: String,
     /// The command to execute
     #[command(subcommand)]
     command: ClientCommand,

@@ -4,33 +4,62 @@ use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService}
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 use url::Url;
 
+use ed25519_dalek::SigningKey;
+use rand_core::OsRng;
 use rusty_paseto::prelude::*;
 
-pub fn generate_token() -> Result<String, GenericBuilderError> {
-    let raw_private_key = Key::<64>::try_from(
-        // TODO: obviously replace with an runtime value.
-        // Generated using:
-        // 
-        // openssl genpkey -algorithm ED25519 -out private_key.pem
-        // set privhex (openssl pkey -in private_key.pem -text -noout | awk '/priv:/{flag=1;next}/pub:/{flag=0}flag' | tr -d ' :\n')
-        // set pubhex  (openssl pkey -in private_key.pem -text -noout | awk '/pub:/{flag=1;next}flag' | tr -d ' :\n')
-        // printf "%s" "$privhex$pubhex" | xxd -r -p > key64.bin
-        // xxd  -c 64 -p key64.bin
-        "4b8cfc546c8bbf4ed9ddaa579474d07375fd5f3d7cc71224a312ae833b99fea1232b2682925597b53d94d42794df1f88fab558ae76ca1b76c5538e25c162b57f",
-    ).expect("expect");
-    let private_key = PasetoAsymmetricPrivateKey::<V4, Public>::from(&raw_private_key);
+pub struct PasetoState {
+    /// The underlying signing key bytes
+    signing_key: SigningKey,
+}
 
-    let token = GenericBuilder::<V4, Public>::default()
-        .set_claim(SubjectClaim::from("manage cache"))
-        .try_sign(&private_key)?;
+impl PasetoState {
+    pub fn public_token(&self) -> Result<String, GenericBuilderError> {
+        let keypair_bytes = self.signing_key.to_keypair_bytes();
+        let private_key = PasetoAsymmetricPrivateKey::<V4, Public>::from(keypair_bytes.as_slice());
 
-    Ok(token)
+        let token = GenericBuilder::<V4, Public>::default()
+            .set_claim(SubjectClaim::from("manage cache"))
+            .try_sign(&private_key)?;
+
+        Ok(token)
+    }
+    pub fn verify_token(&self, token: String) -> bool {
+        let public_key =
+            Key::<32>::try_from(self.signing_key.verifying_key().as_bytes()).expect("expect");
+        let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
+        GenericParser::<V4, Public>::default()
+            .parse(&token, &paseto_public_key)
+            .is_ok()
+    }
+}
+
+impl Default for PasetoState {
+    fn default() -> Self {
+        let mut csprng = OsRng;
+        Self {
+            signing_key: SigningKey::generate(&mut csprng),
+        }
+    }
 }
 
 /// Check the authentication. Dummy implementation, this will be replaced with
 /// PASETO.
 fn check_auth(req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-    let token: tonic::metadata::MetadataValue<_> = "Bearer some-secret-token".parse().unwrap();
+    let header = req
+        .metadata()
+        .get("authentication")
+        .ok_or_else(|| tonic::Status::unauthenticated("authentication header missing"))?;
+
+    // 2) convert to &str
+    let header_str = header
+        .to_str()
+        .map_err(|_| tonic::Status::unauthenticated("invalid authentication header"))?;
+
+    // 3) expect "Bearer <token>"
+    let token = header_str
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
 
     match req.metadata().get("authorization") {
         Some(t) if token == t => Ok(req),
@@ -49,6 +78,7 @@ fn provide_auth(mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic
 /// Get the routes used for the server. These will route the usual services but additionally
 /// provide a check for authentication.
 pub fn server_routes(
+    paseto_state: &PasetoState,
     blob_service: Arc<dyn BlobService>,
     directory_service: Arc<dyn DirectoryService>,
     path_info_service: Arc<dyn PathInfoService>,
