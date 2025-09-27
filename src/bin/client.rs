@@ -18,6 +18,8 @@ enum ClientCommand {
         /// The server address, currently expecting grpc+http as a protocol, but
         /// that is likely to change to make it easier for users.
         #[arg(
+            short,
+            long,
             env = "SNARF_SERVER_ADDRESS",
             default_value = "grpc+http://localhost:9000"
         )]
@@ -41,7 +43,7 @@ enum ClientCommand {
 #[derive(Parser)]
 struct ClientCli {
     /// The authentication token
-    #[arg(short, long)]
+    #[arg(short, long, env = "SNARF_CLIENT_TOKEN")]
     token: String,
     /// The command to execute
     #[command(subcommand)]
@@ -61,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let url = url::Url::parse(&server_address)?;
 
             let (blob_service, directory_service, path_info_service) =
-                snarf::management::clients(&url).await?;
+                snarf::management::clients(client_cli.token.as_ref(), &url).await?;
             // Parse the file at reference_graph_path.
             let reference_graph_json = if reference_graph_path == PathBuf::from("-") {
                 let mut writer: Vec<u8> = vec![];

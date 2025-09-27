@@ -2,18 +2,23 @@ use std::sync::Arc;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
+use tonic::service::Interceptor;
 use url::Url;
 
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use rusty_paseto::prelude::*;
 
+/// State that is needed to perform operations on the PASETO tokens.
+#[derive(Clone)]
 pub struct PasetoState {
-    /// The underlying signing key bytes
+    /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
+    /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
     signing_key: SigningKey,
 }
 
 impl PasetoState {
+    /// Get the public token that can be given to clients
     pub fn public_token(&self) -> Result<String, GenericBuilderError> {
         let keypair_bytes = self.signing_key.to_keypair_bytes();
         let private_key = PasetoAsymmetricPrivateKey::<V4, Public>::from(keypair_bytes.as_slice());
@@ -24,7 +29,8 @@ impl PasetoState {
 
         Ok(token)
     }
-    pub fn verify_token(&self, token: String) -> bool {
+
+    pub fn verify_token(&self, token: &str) -> bool {
         let public_key =
             Key::<32>::try_from(self.signing_key.verifying_key().as_bytes()).expect("expect");
         let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
@@ -42,28 +48,67 @@ impl Default for PasetoState {
         }
     }
 }
+#[derive(Default, Clone)]
+struct PasetoAuthInterceptor {
+    state: PasetoState,
+}
 
-/// Check the authentication. Dummy implementation, this will be replaced with
-/// PASETO.
-fn check_auth(req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-    let header = req
-        .metadata()
-        .get("authentication")
-        .ok_or_else(|| tonic::Status::unauthenticated("authentication header missing"))?;
+impl Interceptor for PasetoAuthInterceptor {
+    fn call(&mut self, request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        let header = request
+            .metadata()
+            .get("authorization")
+            .ok_or_else(|| tonic::Status::unauthenticated("authorization header missing"))?;
 
-    // 2) convert to &str
-    let header_str = header
-        .to_str()
-        .map_err(|_| tonic::Status::unauthenticated("invalid authentication header"))?;
+        // 2) convert to &str
+        let header_str = header
+            .to_str()
+            .map_err(|_| tonic::Status::unauthenticated("invalid authorization header"))?;
 
-    // 3) expect "Bearer <token>"
-    let token = header_str
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
+        // 3) expect "Bearer <token>"
+        let token = header_str
+            .strip_prefix("Bearer ")
+            .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
 
-    match req.metadata().get("authorization") {
-        Some(t) if token == t => Ok(req),
-        _ => Err(tonic::Status::unauthenticated("No valid auth token")),
+        if !self.state.verify_token(token) {
+            return Err(tonic::Status::unauthenticated(
+                "invalid authentication scheme",
+            ));
+        }
+
+        Ok(request)
+    }
+}
+
+impl From<PasetoState> for PasetoAuthInterceptor {
+    fn from(state: PasetoState) -> Self {
+        Self { state }
+    }
+}
+
+#[derive(Clone)]
+struct PasetoTokenInterceptor {
+    token: String,
+}
+
+impl From<&str> for PasetoTokenInterceptor {
+    fn from(token: &str) -> Self {
+        Self {
+            token: token.to_owned(),
+        }
+    }
+}
+
+impl Interceptor for PasetoTokenInterceptor {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        let token: tonic::metadata::MetadataValue<_> =
+            format!("Bearer {}", self.token).parse().unwrap();
+        request.metadata_mut().insert("authorization", token);
+        println!("request: {:?}", request);
+        Ok(request)
     }
 }
 
@@ -87,13 +132,13 @@ pub fn server_routes(
     tonic::service::Routes::new(
         snix_castore::proto::blob_service_server::BlobServiceServer::with_interceptor(
             snix_castore::proto::GRPCBlobServiceWrapper::new(blob_service),
-            check_auth,
+            PasetoAuthInterceptor::from(paseto_state.clone()),
         ),
     )
     .add_service(
         snix_castore::proto::directory_service_server::DirectoryServiceServer::with_interceptor(
             snix_castore::proto::GRPCDirectoryServiceWrapper::new(directory_service),
-            check_auth,
+            PasetoAuthInterceptor::from(paseto_state.clone()),
         ),
     )
     .add_service(
@@ -102,7 +147,7 @@ pub fn server_routes(
                 path_info_service,
                 nar_calculation_service,
             ),
-            check_auth,
+            PasetoAuthInterceptor::from(paseto_state.clone()),
         ),
     )
 }
@@ -113,6 +158,7 @@ pub fn server_routes(
 /// Additionally to the usual Snix way of constructing the services, this
 /// function ensures that the authentication is passed to the server.
 pub async fn clients(
+    token: &str,
     url: &Url,
 ) -> Result<
     (
@@ -127,21 +173,21 @@ pub async fn clients(
             "root".into(),
             snix_castore::proto::blob_service_client::BlobServiceClient::with_interceptor(
                 snix_castore::tonic::channel_from_url(url).await?,
-                provide_auth,
+                PasetoTokenInterceptor::from(token),
             ),
         )),
         Arc::new(snix_castore::directoryservice::GRPCDirectoryService::from_client(
             "root".into(),
             snix_castore::proto::directory_service_client::DirectoryServiceClient::with_interceptor(
                 snix_castore::tonic::channel_from_url(url).await?,
-                provide_auth,
+                PasetoTokenInterceptor::from(token),
             ),
         )),
         Arc::new(snix_store::pathinfoservice::GRPCPathInfoService::from_client(
             "root".into(),
             snix_store::proto::path_info_service_client::PathInfoServiceClient::with_interceptor(
                 snix_castore::tonic::channel_from_url(url).await?,
-                provide_auth,
+                PasetoTokenInterceptor::from(token),
             ),
         ))),
     )
