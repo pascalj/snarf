@@ -30,6 +30,8 @@ impl PasetoState {
         Ok(token)
     }
 
+    /// Verify a client token for this PasetoState (signing_key). Currently, this
+    /// just checks whether it is a valid token, no claims are checked at all.
     pub fn verify_token(&self, token: &str) -> bool {
         let public_key =
             Key::<32>::try_from(self.signing_key.verifying_key().as_bytes()).expect("expect");
@@ -107,17 +109,8 @@ impl Interceptor for PasetoTokenInterceptor {
         let token: tonic::metadata::MetadataValue<_> =
             format!("Bearer {}", self.token).parse().unwrap();
         request.metadata_mut().insert("authorization", token);
-        println!("request: {:?}", request);
         Ok(request)
     }
-}
-
-/// Provide the authentication. Dummy implementation, this will be replaced with
-/// PASETO.
-fn provide_auth(mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-    let token: tonic::metadata::MetadataValue<_> = "Bearer some-secret-token".parse().unwrap();
-    req.metadata_mut().insert("authorization", token);
-    Ok(req)
 }
 
 /// Get the routes used for the server. These will route the usual services but additionally
