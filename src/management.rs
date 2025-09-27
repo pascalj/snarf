@@ -63,9 +63,8 @@ impl TryFrom<&[u8]> for PasetoState {
 
 impl Default for PasetoState {
     fn default() -> Self {
-        let mut csprng = OsRng;
         Self {
-            signing_key: SigningKey::generate(&mut csprng),
+            signing_key: SigningKey::generate(&mut OsRng),
         }
     }
 }

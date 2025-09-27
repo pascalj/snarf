@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
-use futures::StreamExt;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
+
+use tracing::{debug, error, info};
 
 /// The commands this client supports
 ///
@@ -53,6 +54,11 @@ struct ClientCli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Add some logging for the moment
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // use RUST_LOG or fallback
+        .init();
+
     let client_cli = ClientCli::parse();
     match client_cli.command {
         // The "add" command is at the moment basically nix-store's "copy" with
@@ -106,7 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .try_collect()
                 .await?;
 
+            debug!(missing=%elems.len(), "Parsed elements from the reference graph");
+
             // Run ingest_path on all of them.
+            // TODO: rework this for progress metering
             let uploads: Vec<_> = futures::stream::iter(elems)
                 .map(|elem| {
                     // Map to a future returning the root node, alongside with the closure info.
@@ -126,6 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .buffer_unordered(10)
                 .try_collect()
                 .await?;
+
+            info!(uploads=%uploads.len(), "Uploaded data");
 
             // Insert them into the PathInfoService.
             // FUTUREWORK: do this properly respecting the reference graph.
@@ -149,6 +160,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 path_info_service.put(path_info).await?;
             }
+
+            info!("Uploaded PathInfo entries");
         }
     }
 

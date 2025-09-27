@@ -8,7 +8,7 @@ use clap::Parser;
 use snarf::management::{self, PasetoState};
 
 use snix_castore::utils::ServiceUrlsGrpc;
-use tracing::info;
+use tracing::{debug, error, info};
 
 use directories::ProjectDirs;
 
@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let arguments = Arguments::parse();
+
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(snix_store::utils::ServiceUrlsMemory::parse_from(
             std::iter::empty::<&str>(),
@@ -63,16 +64,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         state
     } else {
+        debug!(file=%arguments.private_key_file.display(),  "Reading private key");
         std::fs::read(arguments.private_key_file).and_then(|x| {
             PasetoState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
         })?
     };
 
     match paseto_state.public_token() {
-        Ok(token) => println!("Client token: {}", token),
-        Err(err) => println!(
+        Ok(token) => info!(token=%token, "Client token"),
+        Err(err) => error!(
             "Failed to create client token: {}",
-            err.source().expect("foo").to_string()
+            err.source().expect("No error source available").to_string()
         ),
     }
 
