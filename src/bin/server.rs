@@ -7,26 +7,16 @@ use clap::Parser;
 
 use snarf::management::{self, PasetoState};
 
-use snix_castore::utils::ServiceUrlsGrpc;
 use tracing::{debug, error, info};
 
 use directories::ProjectDirs;
 
-fn server_key_file_default() -> String {
-    ProjectDirs::from("de.pascalj.snarf", "", "snarf")
-        .map(|dir| Path::join(dir.config_dir(), "server_key.bin"))
-        .expect("foo")
-        .to_str()
-        .unwrap_or("server_key.bin")
-        .to_owned()
-}
-
 #[derive(Parser)]
 struct Arguments {
     #[clap(flatten)]
-    service_addrs: ServiceUrlsGrpc,
+    service_addrs: snix_store::utils::ServiceUrls,
 
-    /// The path to the paseto key file
+    /// The path to the paseto key file as raw bytes
     #[arg(short, long, default_value = server_key_file_default())]
     private_key_file: PathBuf,
 
@@ -45,10 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let arguments = Arguments::parse();
 
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
-        snix_store::utils::construct_services(snix_store::utils::ServiceUrlsMemory::parse_from(
-            std::iter::empty::<&str>(),
-        ))
-        .await?;
+        snix_store::utils::construct_services(arguments.service_addrs).await?;
 
     let paseto_state = if !std::fs::exists(arguments.private_key_file.clone())? {
         let state = PasetoState::default();
@@ -59,8 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
 
         info!(
-            "Generated a new private key and wrote it to {:?}",
-            arguments.private_key_file
+            file=%arguments.private_key_file.display(),
+            "Generated and wrote a new private key",
         );
         state
     } else {
@@ -127,4 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     Ok(())
+}
+
+/// The server key default path. It's a bit unwieldy. Revisit when https://github.com/clap-rs/clap/issues/4558 is fixed.
+fn server_key_file_default() -> String {
+    ProjectDirs::from("de.pascalj.snarf", "", "snarf")
+        .map(|dir| Path::join(dir.config_dir(), "server_key.bin"))
+        .expect("Unable to construct key path")
+        .to_str()
+        .unwrap_or("server_key.bin")
+        .to_owned()
 }

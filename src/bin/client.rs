@@ -7,7 +7,7 @@ use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
 
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// The commands this client supports
 ///
@@ -71,7 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let (blob_service, directory_service, path_info_service) =
                 snarf::management::clients(client_cli.token.as_ref(), &url).await?;
+
             // Parse the file at reference_graph_path.
+            // TODO: call out to Nix here to make it like copy-closure
             let reference_graph_json = if reference_graph_path == PathBuf::from("-") {
                 let mut writer: Vec<u8> = vec![];
                 tokio::io::copy(&mut tokio::io::stdin(), &mut writer).await?;
