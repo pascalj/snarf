@@ -40,6 +40,25 @@ impl PasetoState {
             .parse(&token, &paseto_public_key)
             .is_ok()
     }
+
+    pub fn key_bytes(&self) -> [u8; 64] {
+        self.signing_key.to_keypair_bytes()
+    }
+}
+
+impl TryFrom<&[u8]> for PasetoState {
+    type Error = &'static str;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if let Ok(bytes_arr) = bytes.try_into() {
+            return Ok(Self {
+                signing_key: SigningKey::from_keypair_bytes(bytes_arr)
+                    .map_err(|_| "Failed to generate SigningKey from bytes")?,
+            });
+        }
+
+        Err("Failed to contruct PasetoState from bytes")
+    }
 }
 
 impl Default for PasetoState {

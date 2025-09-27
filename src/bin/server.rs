@@ -1,16 +1,34 @@
-use std::error::Error;
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 use clap::Parser;
 
-use snarf::management;
+use snarf::management::{self, PasetoState};
 
 use snix_castore::utils::ServiceUrlsGrpc;
 use tracing::info;
+
+use directories::ProjectDirs;
+
+fn server_key_file_default() -> String {
+    ProjectDirs::from("de.pascalj.snarf", "", "snarf")
+        .map(|dir| Path::join(dir.config_dir(), "server_key.bin"))
+        .expect("foo")
+        .to_str()
+        .unwrap_or("server_key.bin")
+        .to_owned()
+}
 
 #[derive(Parser)]
 struct Arguments {
     #[clap(flatten)]
     service_addrs: ServiceUrlsGrpc,
+
+    /// The path to the paseto key file
+    #[arg(short, long, default_value = server_key_file_default())]
+    private_key_file: PathBuf,
 
     /// The address to listen on.
     #[clap(flatten)]
@@ -23,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // use RUST_LOG or fallback
         .init();
+
     let arguments = Arguments::parse();
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(snix_store::utils::ServiceUrlsMemory::parse_from(
@@ -30,7 +49,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
         .await?;
 
-    let paseto_state = crate::management::PasetoState::default();
+    let paseto_state = if !std::fs::exists(arguments.private_key_file.clone())? {
+        let state = PasetoState::default();
+
+        if let Some(parent) = arguments.private_key_file.parent() {
+            std::fs::create_dir_all(parent)?;
+            std::fs::write(arguments.private_key_file.clone(), state.key_bytes())?;
+        }
+
+        info!(
+            "Generated a new private key and wrote it to {:?}",
+            arguments.private_key_file
+        );
+        state
+    } else {
+        std::fs::read(arguments.private_key_file).and_then(|x| {
+            PasetoState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
+        })?
+    };
+
     match paseto_state.public_token() {
         Ok(token) => println!("Client token: {}", token),
         Err(err) => println!(
@@ -74,10 +111,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     info!(listen_address=%listen_address, "starting daemon");
 
+    let shutdown = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
     tokio_listener::axum07::serve(
         listener.unwrap(),
         app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
     )
+    .with_graceful_shutdown(shutdown)
     .await?;
 
     Ok(())
