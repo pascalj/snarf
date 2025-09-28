@@ -34,8 +34,8 @@ impl ServerState {
     /// Verify a client token for this PasetoState (signing_key). Currently, this
     /// just checks whether it is a valid token, no claims are checked at all.
     pub fn verify_token(&self, token: &str) -> bool {
-        let public_key =
-            Key::<32>::try_from(self.signing_key.verifying_key().as_bytes()).expect("expect");
+        let public_key = Key::<32>::try_from(self.signing_key.verifying_key().as_bytes())
+            .expect("The siging_key is not a valid key");
         let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
         GenericParser::<V4, Public>::default()
             .parse(&token, &paseto_public_key)
@@ -95,6 +95,7 @@ impl Interceptor for PasetoAuthInterceptor {
             .strip_prefix("Bearer ")
             .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
 
+        // TODO: split this off into capabilities
         if !self.state.verify_token(token) {
             return Err(tonic::Status::unauthenticated(
                 "invalid authentication scheme",

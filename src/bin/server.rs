@@ -23,6 +23,7 @@ struct Arguments {
     private_key_file: PathBuf,
 
     /// The Snix store service URLs that are used for the underlying store.
+    /// TODO: have better default paths using ProjectDirs.
     #[clap(flatten)]
     service_addrs: snix_store::utils::ServiceUrls,
 
@@ -98,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     // The nar-bridge serves the actual cache data, unauthenticated.
-    let state = nar_bridge::AppState::new(
+    let nar_bridge_state = nar_bridge::AppState::new(
         blob_service.clone(),
         directory_service.clone(),
         signing_path_info_service.clone(),
@@ -107,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // HTTP
     let app = nar_bridge::gen_router(30)
-        .with_state(state)
+        .with_state(nar_bridge_state)
         .merge(management_routes.into_axum_router());
 
     let listen_address = &arguments.listen_args.listen_address.unwrap_or_else(|| {
