@@ -1,11 +1,12 @@
 use std::{
     error::Error,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use clap::Parser;
 
-use snarf::management::{self, PasetoState};
+use snarf::management::{self, ServerState};
 
 use tracing::{debug, error, info};
 
@@ -13,12 +14,17 @@ use directories::ProjectDirs;
 
 #[derive(Parser)]
 struct Arguments {
-    #[clap(flatten)]
-    service_addrs: snix_store::utils::ServiceUrls,
+    /// The name of the cache, for example for signing info.
+    #[clap(short, long, default_value = "snarf")]
+    cache_name: String,
 
-    /// The path to the paseto key file as raw bytes
+    /// The path to the paseto key file as raw bytes.
     #[arg(short, long, default_value = server_key_file_default())]
     private_key_file: PathBuf,
+
+    /// The Snix store service URLs that are used for the underlying store.
+    #[clap(flatten)]
+    service_addrs: snix_store::utils::ServiceUrls,
 
     /// The address to listen on.
     #[clap(flatten)]
@@ -37,11 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs).await?;
 
-    let paseto_state = if !std::fs::exists(arguments.private_key_file.clone())? {
-        let state = PasetoState::default();
+    let server_state = if !std::fs::exists(arguments.private_key_file.clone())? {
+        let state = ServerState::default();
 
         if let Some(parent) = arguments.private_key_file.parent() {
             std::fs::create_dir_all(parent)?;
+            // TODO: save in nix-compatible form (name:base64)
             std::fs::write(arguments.private_key_file.clone(), state.key_bytes())?;
         }
 
@@ -49,15 +56,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             file=%arguments.private_key_file.display(),
             "Generated and wrote a new private key",
         );
+
         state
     } else {
-        debug!(file=%arguments.private_key_file.display(),  "Reading private key");
+        debug!(file=%arguments.private_key_file.display(),  "Reading keypair");
         std::fs::read(arguments.private_key_file).and_then(|x| {
-            PasetoState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
+            ServerState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
         })?
     };
 
-    match paseto_state.public_token() {
+    match server_state.public_token() {
         Ok(token) => info!(token=%token, "Client token"),
         Err(err) => error!(
             "Failed to create client token: {}",
@@ -65,18 +73,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
     }
 
+    // For now we can just re-use the server's private key for signing.
+    // TODO: make this configurable to override with a different key
+    let signing_key =
+        nix_compat::narinfo::SigningKey::new(arguments.cache_name, server_state.signing_key());
+
+    // The signing_path_info service will sign while ingesting new path_infos.
+    // TODO: check how viable signing is while serving.
+    let signing_path_info_service =
+        Arc::new(snix_store::pathinfoservice::SigningPathInfoService::new(
+            "signing".into(),
+            path_info_service.clone(),
+            Arc::new(signing_key),
+        ));
+
+    // The management channels are used to fill the cache and potentially to configure
+    // it, authenticated.
     let management_routes = management::server_routes(
-        &paseto_state,
+        &server_state,
         blob_service.clone(),
         directory_service.clone(),
-        path_info_service.clone(),
+        signing_path_info_service.clone(),
         nar_calculation_service,
     );
 
+    // The nar-bridge serves the actual cache data, unauthenticated.
     let state = nar_bridge::AppState::new(
         blob_service.clone(),
         directory_service.clone(),
-        path_info_service.clone(),
+        signing_path_info_service.clone(),
         std::num::NonZero::new(64usize).unwrap(),
     );
 
@@ -101,6 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(listen_address=%listen_address, "starting daemon");
 
     let shutdown = async {
+        info!("Press Cltr-C for graceful shutdown.");
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install Ctrl-C handler");

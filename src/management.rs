@@ -1,23 +1,24 @@
 use std::sync::Arc;
 
+use ed25519_dalek::SigningKey;
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 use tonic::service::Interceptor;
 use url::Url;
 
-use ed25519_dalek::SigningKey;
+use base64::prelude::*;
 use rand_core::OsRng;
 use rusty_paseto::prelude::*;
 
 /// State that is needed to perform operations on the PASETO tokens.
 #[derive(Clone)]
-pub struct PasetoState {
+pub struct ServerState {
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
     signing_key: SigningKey,
 }
 
-impl PasetoState {
+impl ServerState {
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> Result<String, GenericBuilderError> {
         let keypair_bytes = self.signing_key.to_keypair_bytes();
@@ -44,9 +45,13 @@ impl PasetoState {
     pub fn key_bytes(&self) -> [u8; 64] {
         self.signing_key.to_keypair_bytes()
     }
+
+    pub fn signing_key(&self) -> SigningKey {
+        self.signing_key.clone()
+    }
 }
 
-impl TryFrom<&[u8]> for PasetoState {
+impl TryFrom<&[u8]> for ServerState {
     type Error = &'static str;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
@@ -61,7 +66,7 @@ impl TryFrom<&[u8]> for PasetoState {
     }
 }
 
-impl Default for PasetoState {
+impl Default for ServerState {
     fn default() -> Self {
         Self {
             signing_key: SigningKey::generate(&mut OsRng),
@@ -70,7 +75,7 @@ impl Default for PasetoState {
 }
 #[derive(Default, Clone)]
 struct PasetoAuthInterceptor {
-    state: PasetoState,
+    state: ServerState,
 }
 
 impl Interceptor for PasetoAuthInterceptor {
@@ -100,8 +105,8 @@ impl Interceptor for PasetoAuthInterceptor {
     }
 }
 
-impl From<PasetoState> for PasetoAuthInterceptor {
-    fn from(state: PasetoState) -> Self {
+impl From<ServerState> for PasetoAuthInterceptor {
+    fn from(state: ServerState) -> Self {
         Self { state }
     }
 }
@@ -134,7 +139,7 @@ impl Interceptor for PasetoTokenInterceptor {
 /// Get the routes used for the server. These will route the usual services but additionally
 /// provide a check for authentication.
 pub fn server_routes(
-    paseto_state: &PasetoState,
+    paseto_state: &ServerState,
     blob_service: Arc<dyn BlobService>,
     directory_service: Arc<dyn DirectoryService>,
     path_info_service: Arc<dyn PathInfoService>,
@@ -202,4 +207,18 @@ pub async fn clients(
             ),
         ))),
     )
+}
+
+/// Serialize an ed25519 keypair in the format that Nix uses with
+/// `nix-store --generate-binary-cache-key`.
+/// Snix provides the counterpart of this, but it doesn't expose the key bytes, so we cannot use it to display the public key nicely.
+pub fn serialize_nix_store_signing_key(
+    path: &std::path::Path,
+    name: &str,
+    key: ed25519_dalek::SigningKey,
+) -> Result<(), std::io::Error> {
+    let base64_keypair = BASE64_STANDARD.encode(key.to_keypair_bytes());
+    let nix_format = format!("{}:{}", name, base64_keypair);
+    std::fs::write(path, nix_format)?;
+    Ok(())
 }

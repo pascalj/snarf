@@ -27,3 +27,4 @@ rusty_paseto = { version = "0.7.2", features = ["batteries_included", "v4_public
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 rand_core = "0.6.4"
 directories = "6.0.0"
+base64 = "0.22.1"
