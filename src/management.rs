@@ -223,3 +223,36 @@ pub fn serialize_nix_store_signing_key(
     std::fs::write(path, nix_format)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_token() {
+        let server_state = ServerState::default();
+        assert!(server_state.verify_token(server_state.public_token().unwrap().as_ref()))
+    }
+
+    #[test]
+    fn invalid_token() {
+        let server_state = ServerState::default();
+        let different_server_state = ServerState::default();
+        assert!(!server_state.verify_token(different_server_state.public_token().unwrap().as_ref()))
+    }
+
+    #[test]
+    fn server_state_from_bytes() {
+        let server_state = ServerState::default();
+        assert!(ServerState::try_from(server_state.key_bytes().as_slice()).is_ok())
+    }
+
+    #[test]
+    fn server_state_from_invalid_bytes() {
+        let server_state = ServerState::default();
+        let mut bytes = server_state.key_bytes();
+        // change a random bytes
+        bytes[4] += 1;
+        assert!(!ServerState::try_from(bytes.as_slice().as_ref()).is_ok())
+    }
+}
