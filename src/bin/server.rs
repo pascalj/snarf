@@ -79,14 +79,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let signing_key =
         nix_compat::narinfo::SigningKey::new(arguments.cache_name, server_state.signing_key());
 
-    // The signing_path_info service will sign while ingesting new path_infos.
-    // TODO: check how viable signing is while serving.
-    let signing_path_info_service =
-        Arc::new(snix_store::pathinfoservice::SigningPathInfoService::new(
-            "signing".into(),
-            path_info_service.clone(),
-            Arc::new(signing_key),
-        ));
+    // The signing_path_info service will sign only while serving new path_infos.
+    let signing_path_info_service = Arc::new(management::LazySigningPathInfoService::new(
+        path_info_service.clone(),
+        Arc::new(signing_key),
+    ));
 
     // The management channels are used to fill the cache and potentially to configure
     // it, authenticated.

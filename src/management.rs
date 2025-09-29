@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use ed25519_dalek::SigningKey;
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
+use tonic::async_trait;
 use tonic::service::Interceptor;
 use url::Url;
 
@@ -15,7 +15,7 @@ use rusty_paseto::prelude::*;
 pub struct ServerState {
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
-    signing_key: SigningKey,
+    signing_key: ed25519_dalek::SigningKey,
 }
 
 impl ServerState {
@@ -46,7 +46,7 @@ impl ServerState {
         self.signing_key.to_keypair_bytes()
     }
 
-    pub fn signing_key(&self) -> SigningKey {
+    pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
         self.signing_key.clone()
     }
 }
@@ -57,7 +57,7 @@ impl TryFrom<&[u8]> for ServerState {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         if let Ok(bytes_arr) = bytes.try_into() {
             return Ok(Self {
-                signing_key: SigningKey::from_keypair_bytes(bytes_arr)
+                signing_key: ed25519_dalek::SigningKey::from_keypair_bytes(bytes_arr)
                     .map_err(|_| "Failed to generate SigningKey from bytes")?,
             });
         }
@@ -69,10 +69,11 @@ impl TryFrom<&[u8]> for ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self {
-            signing_key: SigningKey::generate(&mut OsRng),
+            signing_key: ed25519_dalek::SigningKey::generate(&mut OsRng),
         }
     }
 }
+
 #[derive(Default, Clone)]
 struct PasetoAuthInterceptor {
     state: ServerState,
@@ -134,6 +135,76 @@ impl Interceptor for PasetoTokenInterceptor {
             format!("Bearer {}", self.token).parse().unwrap();
         request.metadata_mut().insert("authorization", token);
         Ok(request)
+    }
+}
+
+/// A PathInfoService wrapper that sing path_infos on the retrieval of entries. This makes
+/// it easy to change the signature by using a different keypair.
+pub struct LazySigningPathInfoService<T> {
+    /// The inner [PathInfoService]
+    inner: T,
+    /// The key to sign narinfos
+    signing_key: Arc<nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey>>,
+}
+
+impl<T> LazySigningPathInfoService<T> {
+    pub fn new(
+        inner: T,
+        signing_key: Arc<nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey>>,
+    ) -> Self {
+        Self { inner, signing_key }
+    }
+}
+
+#[async_trait]
+impl<T> PathInfoService for LazySigningPathInfoService<T>
+where
+    T: PathInfoService,
+{
+    /// Get the pathinfo for a digest. This performs the actual signing of a path_info
+    /// is found for the digest.
+    async fn get(
+        &self,
+        digest: [u8; 20],
+    ) -> Result<Option<snix_store::path_info::PathInfo>, snix_castore::Error> {
+        let path_info = self.inner.get(digest).await?;
+
+        Ok(path_info.map(|mut info| {
+            info.signatures.push({
+                let mut nar_info = info.to_narinfo();
+                nar_info.signatures.clear();
+                nar_info.add_signature(&self.signing_key);
+
+                let new_signature = nar_info
+                    .signatures
+                    .pop()
+                    .expect("Snix bug: no signature after signing op");
+
+                nix_compat::narinfo::Signature::new(
+                    new_signature.name().to_string(),
+                    *new_signature.bytes(),
+                )
+            });
+            info
+        }))
+    }
+
+    /// Don't sign on putting the object into the store.
+    async fn put(
+        &self,
+        path_info: snix_store::path_info::PathInfo,
+    ) -> Result<snix_store::path_info::PathInfo, snix_castore::Error> {
+        self.inner.put(path_info).await
+    }
+
+    /// List all path_infos in this cache
+    fn list(
+        &self,
+    ) -> futures::stream::BoxStream<
+        'static,
+        Result<snix_store::path_info::PathInfo, snix_castore::Error>,
+    > {
+        self.inner.list()
     }
 }
 
