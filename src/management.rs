@@ -10,9 +10,20 @@ use base64::prelude::*;
 use rand_core::OsRng;
 use rusty_paseto::prelude::*;
 
+#[derive(Clone)]
+enum ServerInitialization {
+    /// The server is not initialized and does not have a secret key.
+    Uninitialized,
+    /// The server loaded a serialized secret key and operates normally.
+    Initialized,
+    /// The server was initialized but still needs to serialize the key.
+    NewlyInitialized,
+}
+
 /// State that is needed to perform operations on the PASETO tokens.
 #[derive(Clone)]
 pub struct ServerState {
+    initialzation: ServerInitialization,
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
     signing_key: ed25519_dalek::SigningKey,
@@ -57,6 +68,7 @@ impl TryFrom<&[u8]> for ServerState {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         if let Ok(bytes_arr) = bytes.try_into() {
             return Ok(Self {
+                initialzation: ServerInitialization::Initialized,
                 signing_key: ed25519_dalek::SigningKey::from_keypair_bytes(bytes_arr)
                     .map_err(|_| "Failed to generate SigningKey from bytes")?,
             });
@@ -69,6 +81,7 @@ impl TryFrom<&[u8]> for ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self {
+            initialzation: ServerInitialization::Uninitialized,
             signing_key: ed25519_dalek::SigningKey::generate(&mut OsRng),
         }
     }
