@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 
 use tracing::{debug, info};
 
+tonic::include_proto!("snarf.v1");
+
 /// The commands this client supports
 ///
 /// TODO: make this ergonomic for users
@@ -28,6 +30,7 @@ enum ClientCommand {
         #[arg(value_name = "NIX_ATTRS_JSON_FILE", env = "NIX_ATTRS_JSON_FILE")]
         reference_graph_path: PathBuf,
     },
+    CreateToken,
 }
 
 /// CLI arguments for the client
@@ -60,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let client_cli = ClientCli::parse();
+
     match client_cli.command {
         // The "add" command is at the moment basically nix-store's "copy" with
         // some dummy authentication slapped on top of it.
@@ -164,6 +168,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
 
             info!("Uploaded PathInfo entries");
+        }
+        ClientCommand::CreateToken => {
+            let mut client = management_service_client::ManagementServiceClient::connect(format!(
+                "grpc+http://{}",
+                client_cli.server_address
+            ))
+            .await?;
+
+            let request = tonic::Request::new(NewClientTokenRequest {
+                capabilities: vec![],
+            });
+            let response = client.create_client_token(request).await?;
+
+            info!("Token: {}", response.into_inner().token);
         }
     }
 

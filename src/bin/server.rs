@@ -1,14 +1,13 @@
 use std::{
-    error::Error,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use clap::Parser;
 
 use snarf::management::{self, ServerState};
 
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use directories::ProjectDirs;
 
@@ -47,16 +46,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server_state = if !std::fs::exists(arguments.private_key_file.clone())? {
         let state = ServerState::default();
 
-        if let Some(parent) = arguments.private_key_file.parent() {
-            std::fs::create_dir_all(parent)?;
-            // TODO: save in nix-compatible form (name:base64)
-            std::fs::write(arguments.private_key_file.clone(), state.key_bytes())?;
-        }
+        // TODO: make this safe when the keypair is initialized on request.
+        // if let Some(parent) = arguments.private_key_file.parent() {
+        //     std::fs::create_dir_all(parent)?;
+        //     // TODO: save in nix-compatible form (name:base64)
+        //     std::fs::write(arguments.private_key_file.clone(), state.key_bytes())?;
+        // }
 
-        info!(
-            file=%arguments.private_key_file.display(),
-            "Generated and wrote a new private key",
-        );
+        // info!(
+        //     file=%arguments.private_key_file.display(),
+        //     "Generated and wrote a new private key",
+        // );
 
         state
     } else {
@@ -65,14 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ServerState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
         })?
     };
-
-    match server_state.public_token() {
-        Ok(token) => info!(token=%token, "Client token"),
-        Err(err) => error!(
-            "Failed to create client token: {}",
-            err.source().expect("No error source available").to_string()
-        ),
-    }
 
     // For now we can just re-use the server's private key for signing.
     // TODO: make this configurable to override with a different key
@@ -88,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // The management channels are used to fill the cache and potentially to configure
     // it, authenticated.
     let management_routes = management::server_routes(
-        &server_state,
+        Arc::new(RwLock::new(server_state)),
         blob_service.clone(),
         directory_service.clone(),
         signing_path_info_service.clone(),

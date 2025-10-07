@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
@@ -10,7 +10,11 @@ use base64::prelude::*;
 use rand_core::OsRng;
 use rusty_paseto::prelude::*;
 
-#[derive(Clone)]
+use tracing::info;
+
+tonic::include_proto!("snarf.v1");
+
+#[derive(Clone, Eq, PartialEq)]
 enum ServerInitialization {
     /// The server is not initialized and does not have a secret key.
     Uninitialized,
@@ -21,15 +25,25 @@ enum ServerInitialization {
 }
 
 /// State that is needed to perform operations on the PASETO tokens.
-#[derive(Clone)]
 pub struct ServerState {
-    initialzation: ServerInitialization,
+    initialization: ServerInitialization,
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
     signing_key: ed25519_dalek::SigningKey,
 }
 
 impl ServerState {
+    /// Renew the signing key
+    pub fn initialize_signing_key(&mut self) {
+        match self.initialization {
+            ServerInitialization::Uninitialized => {
+                self.signing_key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+                self.initialization = ServerInitialization::NewlyInitialized;
+            }
+            _ => assert!(false, "Cannot initialize an already initialized server."),
+        }
+    }
+
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> Result<String, GenericBuilderError> {
         let keypair_bytes = self.signing_key.to_keypair_bytes();
@@ -68,7 +82,7 @@ impl TryFrom<&[u8]> for ServerState {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         if let Ok(bytes_arr) = bytes.try_into() {
             return Ok(Self {
-                initialzation: ServerInitialization::Initialized,
+                initialization: ServerInitialization::Initialized,
                 signing_key: ed25519_dalek::SigningKey::from_keypair_bytes(bytes_arr)
                     .map_err(|_| "Failed to generate SigningKey from bytes")?,
             });
@@ -81,7 +95,7 @@ impl TryFrom<&[u8]> for ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self {
-            initialzation: ServerInitialization::Uninitialized,
+            initialization: ServerInitialization::Uninitialized,
             signing_key: ed25519_dalek::SigningKey::generate(&mut OsRng),
         }
     }
@@ -89,7 +103,7 @@ impl Default for ServerState {
 
 #[derive(Default, Clone)]
 struct PasetoAuthInterceptor {
-    state: ServerState,
+    state: Arc<RwLock<ServerState>>,
 }
 
 impl Interceptor for PasetoAuthInterceptor {
@@ -110,7 +124,12 @@ impl Interceptor for PasetoAuthInterceptor {
             .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
 
         // TODO: split this off into capabilities
-        if !self.state.verify_token(token) {
+        if !self
+            .state
+            .read()
+            .map_err(|_| tonic::Status::internal("unable to get lock"))?
+            .verify_token(token)
+        {
             return Err(tonic::Status::unauthenticated(
                 "invalid authentication scheme",
             ));
@@ -120,8 +139,8 @@ impl Interceptor for PasetoAuthInterceptor {
     }
 }
 
-impl From<ServerState> for PasetoAuthInterceptor {
-    fn from(state: ServerState) -> Self {
+impl From<Arc<RwLock<ServerState>>> for PasetoAuthInterceptor {
+    fn from(state: Arc<RwLock<ServerState>>) -> Self {
         Self { state }
     }
 }
@@ -224,7 +243,7 @@ where
 /// Get the routes used for the server. These will route the usual services but additionally
 /// provide a check for authentication.
 pub fn server_routes(
-    paseto_state: &ServerState,
+    server_state: Arc<RwLock<ServerState>>,
     blob_service: Arc<dyn BlobService>,
     directory_service: Arc<dyn DirectoryService>,
     path_info_service: Arc<dyn PathInfoService>,
@@ -233,13 +252,13 @@ pub fn server_routes(
     tonic::service::Routes::new(
         snix_castore::proto::blob_service_server::BlobServiceServer::with_interceptor(
             snix_castore::proto::GRPCBlobServiceWrapper::new(blob_service),
-            PasetoAuthInterceptor::from(paseto_state.clone()),
+            PasetoAuthInterceptor::from(server_state.clone()),
         ),
     )
     .add_service(
         snix_castore::proto::directory_service_server::DirectoryServiceServer::with_interceptor(
             snix_castore::proto::GRPCDirectoryServiceWrapper::new(directory_service),
-            PasetoAuthInterceptor::from(paseto_state.clone()),
+            PasetoAuthInterceptor::from(server_state.clone()),
         ),
     )
     .add_service(
@@ -248,9 +267,12 @@ pub fn server_routes(
                 path_info_service,
                 nar_calculation_service,
             ),
-            PasetoAuthInterceptor::from(paseto_state.clone()),
+            PasetoAuthInterceptor::from(server_state.clone()),
         ),
     )
+    .add_service(management_service_server::ManagementServiceServer::new(
+        ManagementServiceServer::from(server_state.clone()),
+    ))
 }
 
 /// Create the clients that are necessary to talk to the server. Currently,
@@ -306,6 +328,47 @@ pub fn serialize_nix_store_signing_key(
     let nix_format = format!("{}:{}", name, base64_keypair);
     std::fs::write(path, nix_format)?;
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct ManagementServiceServer {
+    server_state: Arc<RwLock<ServerState>>,
+}
+
+impl From<Arc<RwLock<ServerState>>> for ManagementServiceServer {
+    fn from(server_state: Arc<RwLock<ServerState>>) -> Self {
+        Self { server_state }
+    }
+}
+
+#[tonic::async_trait]
+impl management_service_server::ManagementService for ManagementServiceServer {
+    async fn create_client_token(
+        &self,
+        _: tonic::Request<NewClientTokenRequest>,
+    ) -> Result<tonic::Response<ClientToken>, tonic::Status> {
+        let mut state = self
+            .server_state
+            .write()
+            .map_err(|_| tonic::Status::internal("Unable to acquire server lock"))?;
+
+        if state.initialization != ServerInitialization::Uninitialized {
+            return Err(tonic::Status::permission_denied(
+                "Server is already initialized",
+            ));
+        }
+
+        info!("Generating new admin token");
+        state.initialize_signing_key();
+
+        let reply = ClientToken {
+            token: state
+                .public_token()
+                .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
+        };
+
+        Ok(tonic::Response::new(reply))
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package snarf.v1;
+
+message ClientToken {
+  string token = 1;
+}
+
+message NewClientTokenRequest {
+  repeated string capabilities = 1;
+}
+
+service ManagementService {
+  rpc CreateClientToken(NewClientTokenRequest) returns (ClientToken) {}
+}
