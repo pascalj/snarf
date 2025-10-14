@@ -43,22 +43,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs).await?;
 
-    let server_state = if !std::fs::exists(arguments.private_key_file.clone())? {
-        let state = ServerState::default();
-
-        // TODO: make this safe when the keypair is initialized on request.
-        // if let Some(parent) = arguments.private_key_file.parent() {
-        //     std::fs::create_dir_all(parent)?;
-        //     // TODO: save in nix-compatible form (name:base64)
-        //     std::fs::write(arguments.private_key_file.clone(), state.key_bytes())?;
-        // }
-
-        // info!(
-        //     file=%arguments.private_key_file.display(),
-        //     "Generated and wrote a new private key",
-        // );
-
-        state
+    let server_state = if !std::fs::exists(&arguments.private_key_file)? {
+        ServerState::uninitialized(&arguments.private_key_file)
     } else {
         debug!(file=%arguments.private_key_file.display(),  "Reading keypair");
         std::fs::read(arguments.private_key_file).and_then(|x| {

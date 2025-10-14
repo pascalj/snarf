@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use rand_core::OsRng;
 
@@ -11,14 +14,14 @@ use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 
 use tonic::{async_trait, service::Interceptor};
 
-use tracing::info;
+use tracing::{error, info};
 
 tonic::include_proto!("snarf.v1");
 
 #[derive(Clone, Eq, PartialEq)]
 enum ServerInitialization {
     /// The server is not initialized and does not have a secret key.
-    Uninitialized,
+    Uninitialized(PathBuf),
     /// The server loaded a serialized secret key and operates normally.
     Initialized,
     /// The server was initialized but still needs to serialize the key.
@@ -36,13 +39,32 @@ pub struct ServerState {
 impl ServerState {
     /// Renew the signing key
     pub fn initialize_signing_key(&mut self) {
-        match self.initialization {
-            ServerInitialization::Uninitialized => {
+        match &self.initialization {
+            ServerInitialization::Uninitialized(out_path) => {
                 self.signing_key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-                self.initialization = ServerInitialization::NewlyInitialized;
+                if let Ok(_) = self.write_key(&out_path) {
+                    self.initialization = ServerInitialization::NewlyInitialized;
+                } else {
+                    error!("Unable to create the key file");
+                }
             }
             _ => assert!(false, "Cannot initialize an already initialized server."),
         }
+    }
+
+    fn write_key(&self, out_path: &PathBuf) -> std::result::Result<(), std::io::Error> {
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+            // TODO: save in nix-compatible form (name:base64)
+            std::fs::write(out_path.clone(), self.key_bytes())?;
+        }
+
+        info!(
+            file=%out_path.display(),
+            "Generated and wrote a new private key",
+        );
+
+        Ok(())
     }
 
     /// Get the public token that can be given to clients
@@ -96,16 +118,18 @@ impl TryFrom<&[u8]> for ServerState {
     }
 }
 
-impl Default for ServerState {
-    fn default() -> Self {
+impl ServerState {
+    pub fn uninitialized<P: AsRef<std::path::Path>>(out_key_path: P) -> Self {
         Self {
-            initialization: ServerInitialization::Uninitialized,
+            initialization: ServerInitialization::Uninitialized(
+                out_key_path.as_ref().to_path_buf(),
+            ),
             signing_key: ed25519_dalek::SigningKey::generate(&mut OsRng),
         }
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 /// An interceptor for the gRPC endpoint. It validates the incoming token
 /// on the server and ensures that the client has the sufficient permissions to
 /// perform a certain action.
@@ -283,22 +307,22 @@ impl management_service_server::ManagementService for ManagementServiceServer {
             .write()
             .map_err(|_| tonic::Status::internal("Unable to acquire server lock"))?;
 
-        if state.initialization != ServerInitialization::Uninitialized {
-            return Err(tonic::Status::permission_denied(
+        match state.initialization {
+            ServerInitialization::Uninitialized(_) => {
+                info!("Generating new admin token");
+                state.initialize_signing_key();
+
+                Ok(tonic::Response::new(ClientToken {
+                    token: state.public_token().map_err(|_| {
+                        tonic::Status::internal("Unable to generate token from state")
+                    })?,
+                }))
+            }
+
+            _ => Err(tonic::Status::permission_denied(
                 "Server is already initialized",
-            ));
+            )),
         }
-
-        info!("Generating new admin token");
-        state.initialize_signing_key();
-
-        let reply = ClientToken {
-            token: state
-                .public_token()
-                .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
-        };
-
-        Ok(tonic::Response::new(reply))
     }
 }
 #[cfg(test)]
@@ -307,26 +331,26 @@ mod tests {
 
     #[test]
     fn successful_token() {
-        let server_state = ServerState::default();
+        let server_state = ServerState::uninitialized(&PathBuf::from("/dummy"));
         assert!(server_state.verify_token(server_state.public_token().unwrap().as_ref()))
     }
 
     #[test]
     fn invalid_token() {
-        let server_state = ServerState::default();
-        let different_server_state = ServerState::default();
+        let server_state = ServerState::uninitialized(&PathBuf::from("/dummy"));
+        let different_server_state = ServerState::uninitialized(&PathBuf::from("/dummy"));
         assert!(!server_state.verify_token(different_server_state.public_token().unwrap().as_ref()))
     }
 
     #[test]
     fn server_state_from_bytes() {
-        let server_state = ServerState::default();
+        let server_state = ServerState::uninitialized(&PathBuf::from("/dummy"));
         assert!(ServerState::try_from(server_state.key_bytes().as_slice()).is_ok())
     }
 
     #[test]
     fn server_state_from_invalid_bytes() {
-        let server_state = ServerState::default();
+        let server_state = ServerState::uninitialized(&PathBuf::from("/dummy"));
         let mut bytes = server_state.key_bytes();
         // change a random bytes
         bytes[4] += 1;
