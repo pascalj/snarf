@@ -6,10 +6,16 @@ Snarf is supposed to become a small, flexible, and fast Nix HTTP (NAR) cache bas
 
 The project is not ready for use, but it works.
 
-To test, start the server and copy the [PASETO](https://paseto.io/) token for the client from its output:
+To run, start the server and copy the [PASETO](https://paseto.io/) token for the client from its output:
 
 ```
 RUST_LOG=info server
+```
+
+And initialize it by generating a new token:
+
+```
+RUST_LOG=info client --token "dummy" create-token
 ```
 
 Pass the token to the client and ingest a closure from your local store:
