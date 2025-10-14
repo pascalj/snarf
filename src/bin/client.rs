@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 url::Url::parse(format!("grpc+http://{}", client_cli.server_address).as_ref())?;
 
             let (blob_service, directory_service, path_info_service) =
-                snarf::management::clients(client_cli.token.as_ref(), &url).await?;
+                snarf::client::clients(client_cli.token.as_ref(), &url).await?;
 
             // Parse the file at reference_graph_path.
             // TODO: call out to Nix here to make it like copy-closure

@@ -5,7 +5,7 @@ use std::{
 
 use clap::Parser;
 
-use snarf::management::{self, ServerState};
+use snarf::server::ServerState;
 
 use tracing::{debug, info};
 
@@ -72,14 +72,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         nix_compat::narinfo::SigningKey::new(arguments.cache_name, server_state.signing_key());
 
     // The signing_path_info service will sign only while serving new path_infos.
-    let signing_path_info_service = Arc::new(management::LazySigningPathInfoService::new(
+    let signing_path_info_service = Arc::new(snarf::server::LazySigningPathInfoService::new(
         path_info_service.clone(),
         Arc::new(signing_key),
     ));
 
     // The management channels are used to fill the cache and potentially to configure
     // it, authenticated.
-    let management_routes = management::server_routes(
+    let management_routes = snarf::server::server_routes(
         Arc::new(RwLock::new(server_state)),
         blob_service.clone(),
         directory_service.clone(),

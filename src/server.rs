@@ -1,14 +1,15 @@
 use std::sync::{Arc, RwLock};
 
-use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
-use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
-use tonic::async_trait;
-use tonic::service::Interceptor;
-use url::Url;
+use rand_core::OsRng;
+
+use rusty_paseto::prelude::*;
 
 use base64::prelude::*;
-use rand_core::OsRng;
-use rusty_paseto::prelude::*;
+
+use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
+use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
+
+use tonic::{async_trait, service::Interceptor};
 
 use tracing::info;
 
@@ -45,11 +46,13 @@ impl ServerState {
     }
 
     /// Get the public token that can be given to clients
-    pub fn public_token(&self) -> Result<String, GenericBuilderError> {
+    pub fn public_token(&self) -> Result<String, rusty_paseto::prelude::GenericBuilderError> {
         let keypair_bytes = self.signing_key.to_keypair_bytes();
-        let private_key = PasetoAsymmetricPrivateKey::<V4, Public>::from(keypair_bytes.as_slice());
+        let private_key = rusty_paseto::core::PasetoAsymmetricPrivateKey::<V4, Public>::from(
+            keypair_bytes.as_slice(),
+        );
 
-        let token = GenericBuilder::<V4, Public>::default()
+        let token = rusty_paseto::prelude::GenericBuilder::<V4, Public>::default()
             .set_claim(SubjectClaim::from("manage cache"))
             .try_sign(&private_key)?;
 
@@ -59,10 +62,11 @@ impl ServerState {
     /// Verify a client token for this PasetoState (signing_key). Currently, this
     /// just checks whether it is a valid token, no claims are checked at all.
     pub fn verify_token(&self, token: &str) -> bool {
-        let public_key = Key::<32>::try_from(self.signing_key.verifying_key().as_bytes())
-            .expect("The siging_key is not a valid key");
+        let public_key =
+            rusty_paseto::core::Key::<32>::try_from(self.signing_key.verifying_key().as_bytes())
+                .expect("The siging_key is not a valid key");
         let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
-        GenericParser::<V4, Public>::default()
+        rusty_paseto::prelude::GenericParser::<V4, Public>::default()
             .parse(&token, &paseto_public_key)
             .is_ok()
     }
@@ -102,11 +106,18 @@ impl Default for ServerState {
 }
 
 #[derive(Default, Clone)]
+/// An interceptor for the gRPC endpoint. It validates the incoming token
+/// on the server and ensures that the client has the sufficient permissions to
+/// perform a certain action.
 struct PasetoAuthInterceptor {
+    /// The server state to use for authentication.
     state: Arc<RwLock<ServerState>>,
 }
 
 impl Interceptor for PasetoAuthInterceptor {
+    /// Check the authentication for this request based on a PASETO token.
+    /// This currently only takes into account whether the token is valid
+    /// in general, not any specific capabilities.
     fn call(&mut self, request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
         let header = request
             .metadata()
@@ -142,31 +153,6 @@ impl Interceptor for PasetoAuthInterceptor {
 impl From<Arc<RwLock<ServerState>>> for PasetoAuthInterceptor {
     fn from(state: Arc<RwLock<ServerState>>) -> Self {
         Self { state }
-    }
-}
-
-#[derive(Clone)]
-struct PasetoTokenInterceptor {
-    token: String,
-}
-
-impl From<&str> for PasetoTokenInterceptor {
-    fn from(token: &str) -> Self {
-        Self {
-            token: token.to_owned(),
-        }
-    }
-}
-
-impl Interceptor for PasetoTokenInterceptor {
-    fn call(
-        &mut self,
-        mut request: tonic::Request<()>,
-    ) -> Result<tonic::Request<()>, tonic::Status> {
-        let token: tonic::metadata::MetadataValue<_> =
-            format!("Bearer {}", self.token).parse().unwrap();
-        request.metadata_mut().insert("authorization", token);
-        Ok(request)
     }
 }
 
@@ -275,61 +261,6 @@ pub fn server_routes(
     ))
 }
 
-/// Create the clients that are necessary to talk to the server. Currently,
-/// these are the blob-, directory- and path_info services. These can be used
-/// to manage a remote Snix store.
-/// Additionally to the usual Snix way of constructing the services, this
-/// function ensures that the authentication is passed to the server.
-pub async fn clients(
-    token: &str,
-    url: &Url,
-) -> Result<
-    (
-        Arc<dyn BlobService>,
-        Arc<dyn DirectoryService>,
-        Arc<dyn PathInfoService>,
-    ),
-    Box<dyn std::error::Error + Send + Sync + 'static>,
-> {
-    Ok(
-        (Arc::new(snix_castore::blobservice::GRPCBlobService::from_client(
-            "root".into(),
-            snix_castore::proto::blob_service_client::BlobServiceClient::with_interceptor(
-                snix_castore::tonic::channel_from_url(url).await?,
-                PasetoTokenInterceptor::from(token),
-            ),
-        )),
-        Arc::new(snix_castore::directoryservice::GRPCDirectoryService::from_client(
-            "root".into(),
-            snix_castore::proto::directory_service_client::DirectoryServiceClient::with_interceptor(
-                snix_castore::tonic::channel_from_url(url).await?,
-                PasetoTokenInterceptor::from(token),
-            ),
-        )),
-        Arc::new(snix_store::pathinfoservice::GRPCPathInfoService::from_client(
-            "root".into(),
-            snix_store::proto::path_info_service_client::PathInfoServiceClient::with_interceptor(
-                snix_castore::tonic::channel_from_url(url).await?,
-                PasetoTokenInterceptor::from(token),
-            ),
-        ))),
-    )
-}
-
-/// Serialize an ed25519 keypair in the format that Nix uses with
-/// `nix-store --generate-binary-cache-key`.
-/// Snix provides the counterpart of this, but it doesn't expose the key bytes, so we cannot use it to display the public key nicely.
-pub fn serialize_nix_store_signing_key(
-    path: &std::path::Path,
-    name: &str,
-    key: ed25519_dalek::SigningKey,
-) -> Result<(), std::io::Error> {
-    let base64_keypair = BASE64_STANDARD.encode(key.to_keypair_bytes());
-    let nix_format = format!("{}:{}", name, base64_keypair);
-    std::fs::write(path, nix_format)?;
-    Ok(())
-}
-
 #[derive(Clone)]
 pub struct ManagementServiceServer {
     server_state: Arc<RwLock<ServerState>>,
@@ -370,7 +301,6 @@ impl management_service_server::ManagementService for ManagementServiceServer {
         Ok(tonic::Response::new(reply))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,4 +332,18 @@ mod tests {
         bytes[4] += 1;
         assert!(!ServerState::try_from(bytes.as_slice().as_ref()).is_ok())
     }
+}
+
+/// Serialize an ed25519 keypair in the format that Nix uses with
+/// `nix-store --generate-binary-cache-key`.
+/// Snix provides the counterpart of this, but it doesn't expose the key bytes, so we cannot use it to display the public key nicely.
+pub fn serialize_nix_store_signing_key(
+    path: &std::path::Path,
+    name: &str,
+    key: ed25519_dalek::SigningKey,
+) -> Result<(), std::io::Error> {
+    let base64_keypair = BASE64_STANDARD.encode(key.to_keypair_bytes());
+    let nix_format = format!("{}:{}", name, base64_keypair);
+    std::fs::write(path, nix_format)?;
+    Ok(())
 }
