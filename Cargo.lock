@@ -2219,7 +2219,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 [[package]]
 name = "nar-bridge"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "axum 0.7.9",
  "axum-extra",
@@ -2302,7 +2302,7 @@ dependencies = [
 [[package]]
 name = "nix-compat"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "bitflags 2.9.1",
  "bstr",
@@ -2329,7 +2329,7 @@ dependencies = [
 [[package]]
 name = "nix-compat-derive"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "snix-build"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3821,7 +3821,7 @@ dependencies = [
 [[package]]
 name = "snix-castore"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "async-compression",
  "async-stream",
@@ -3877,7 +3877,7 @@ dependencies = [
 [[package]]
 name = "snix-eval"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "bstr",
  "bytes",
@@ -3913,7 +3913,7 @@ dependencies = [
 [[package]]
 name = "snix-eval-builtin-macros"
 version = "0.0.1"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3923,7 +3923,7 @@ dependencies = [
 [[package]]
 name = "snix-glue"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "async-compression",
  "async-stream",
@@ -3958,7 +3958,7 @@ dependencies = [
 [[package]]
 name = "snix-store"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4014,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "snix-tracing"
 version = "0.1.0"
-source = "git+https://git.snix.dev/snix/snix.git#3258ed865f980af397ab766787964d2e8bdeb362"
+source = "git+https://git.snix.dev/snix/snix.git#4aaef4cdf6f7766eedcfe1b5bad8f1c4e4d05c12"
 dependencies = [
  "axum 0.7.9",
  "http",
