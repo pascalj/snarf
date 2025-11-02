@@ -3374,6 +3374,7 @@ dependencies = [
  "serde_json",
  "snix-castore",
  "snix-store",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-listener 0.5.2",
  "tonic 0.12.3",

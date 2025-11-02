@@ -1,13 +1,14 @@
 use std::{
+    ops::Deref,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
 
 use rand_core::OsRng;
 
+use base64::{DecodeError, prelude::*};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH};
 use rusty_paseto::prelude::*;
-
-use base64::prelude::*;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
@@ -17,6 +18,50 @@ use tonic::{async_trait, service::Interceptor};
 use tracing::{error, info};
 
 tonic::include_proto!("snarf.v1");
+
+#[derive(Clone)]
+pub struct CacheKeypair {
+    pub name: String,
+    pub signing_key: ed25519_dalek::SigningKey,
+}
+
+impl CacheKeypair {
+    pub fn new(name: &str, signing_key: Option<ed25519_dalek::SigningKey>) -> Self {
+        use rand_core::OsRng;
+        Self {
+            name: name.into(),
+            signing_key: signing_key.unwrap_or(ed25519_dalek::SigningKey::generate(&mut OsRng)),
+        }
+    }
+
+    pub fn signing_key(&self) -> &ed25519_dalek::SigningKey {
+        &self.signing_key
+    }
+}
+
+impl From<&CacheKeypair> for nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey> {
+    fn from(
+        cache_keypair: &CacheKeypair,
+    ) -> nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey> {
+        Self::new(
+            cache_keypair.name.clone(),
+            cache_keypair.signing_key.clone(),
+        )
+    }
+}
+
+pub type PasetoKeypair = ed25519_dalek::SigningKey;
+
+#[derive(Debug)]
+pub enum Error {
+    SigningKeyError(nix_compat::narinfo::SigningKeyError),
+    IOError(std::io::Error),
+    InvalidName(String),
+    InvalidVerifyingKey(ed25519_dalek::SignatureError),
+    DecodeError(DecodeError),
+    InvalidSigningKeyLen(usize),
+    MissingSeparator,
+}
 
 #[derive(Clone, Eq, PartialEq)]
 enum ServerInitialization {
@@ -33,15 +78,25 @@ pub struct ServerState {
     initialization: ServerInitialization,
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
-    signing_key: ed25519_dalek::SigningKey,
+    paseto_keypair: PasetoKeypair,
+
+    /// The key that is used for signing the narinfo.
+    cache_keypair: CacheKeypair,
 }
 
 impl ServerState {
+    pub fn new(paseto_keypair: &PasetoKeypair, cache_keypair: &CacheKeypair) -> ServerState {
+        Self {
+            initialization: ServerInitialization::Initialized,
+            paseto_keypair: paseto_keypair.clone(),
+            cache_keypair: cache_keypair.clone(),
+        }
+    }
     /// Renew the signing key
     pub fn initialize_signing_key(&mut self) {
         match &self.initialization {
             ServerInitialization::Uninitialized(out_path) => {
-                self.signing_key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+                self.paseto_keypair = PasetoKeypair::generate(&mut OsRng);
                 if let Ok(_) = self.write_key(&out_path) {
                     self.initialization = ServerInitialization::NewlyInitialized;
                 } else {
@@ -69,7 +124,7 @@ impl ServerState {
 
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> Result<String, rusty_paseto::prelude::GenericBuilderError> {
-        let keypair_bytes = self.signing_key.to_keypair_bytes();
+        let keypair_bytes = self.paseto_keypair.to_keypair_bytes();
         let private_key = rusty_paseto::core::PasetoAsymmetricPrivateKey::<V4, Public>::from(
             keypair_bytes.as_slice(),
         );
@@ -85,7 +140,7 @@ impl ServerState {
     /// just checks whether it is a valid token, no claims are checked at all.
     pub fn verify_token(&self, token: &str) -> bool {
         let public_key =
-            rusty_paseto::core::Key::<32>::try_from(self.signing_key.verifying_key().as_bytes())
+            rusty_paseto::core::Key::<32>::try_from(self.paseto_keypair.verifying_key().as_bytes())
                 .expect("The siging_key is not a valid key");
         let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
         rusty_paseto::prelude::GenericParser::<V4, Public>::default()
@@ -94,11 +149,11 @@ impl ServerState {
     }
 
     pub fn key_bytes(&self) -> [u8; 64] {
-        self.signing_key.to_keypair_bytes()
+        self.paseto_keypair.to_keypair_bytes()
     }
 
     pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
-        self.signing_key.clone()
+        self.paseto_keypair.clone()
     }
 }
 
@@ -109,8 +164,16 @@ impl TryFrom<&[u8]> for ServerState {
         if let Ok(bytes_arr) = bytes.try_into() {
             return Ok(Self {
                 initialization: ServerInitialization::Initialized,
-                signing_key: ed25519_dalek::SigningKey::from_keypair_bytes(bytes_arr)
+                paseto_keypair: PasetoKeypair::from_keypair_bytes(bytes_arr)
                     .map_err(|_| "Failed to generate SigningKey from bytes")?,
+                // TODO: fix it to use its own bytes
+                cache_keypair: CacheKeypair::new(
+                    "snarf".into(),
+                    Some(
+                        ed25519_dalek::SigningKey::from_keypair_bytes(bytes_arr)
+                            .map_err(|_| "Failed to generate SigningKey from bytes")?,
+                    ),
+                ),
             });
         }
 
@@ -124,7 +187,11 @@ impl ServerState {
             initialization: ServerInitialization::Uninitialized(
                 out_key_path.as_ref().to_path_buf(),
             ),
-            signing_key: ed25519_dalek::SigningKey::generate(&mut OsRng),
+            paseto_keypair: ed25519_dalek::SigningKey::generate(&mut OsRng),
+            cache_keypair: CacheKeypair::new(
+                "snarf".into(),
+                Some(ed25519_dalek::SigningKey::generate(&mut OsRng)),
+            ),
         }
     }
 }
@@ -186,15 +253,15 @@ pub struct LazySigningPathInfoService<T> {
     /// The inner [PathInfoService]
     inner: T,
     /// The key to sign narinfos
-    signing_key: Arc<nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey>>,
+    cache_keypair: CacheKeypair,
 }
 
 impl<T> LazySigningPathInfoService<T> {
-    pub fn new(
-        inner: T,
-        signing_key: Arc<nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey>>,
-    ) -> Self {
-        Self { inner, signing_key }
+    pub fn new(inner: T, cache_keypair: CacheKeypair) -> Self {
+        Self {
+            inner,
+            cache_keypair,
+        }
     }
 }
 
@@ -214,8 +281,10 @@ where
         Ok(path_info.map(|mut info| {
             info.signatures.push({
                 let mut nar_info = info.to_narinfo();
+                let key: nix_compat::narinfo::SigningKey<ed25519_dalek::SigningKey> =
+                    (&self.cache_keypair).into();
                 nar_info.signatures.clear();
-                nar_info.add_signature(&self.signing_key);
+                nar_info.add_signature(&key);
 
                 let new_signature = nar_info
                     .signatures
@@ -358,16 +427,45 @@ mod tests {
     }
 }
 
-/// Serialize an ed25519 keypair in the format that Nix uses with
-/// `nix-store --generate-binary-cache-key`.
-/// Snix provides the counterpart of this, but it doesn't expose the key bytes, so we cannot use it to display the public key nicely.
+/// Serialize an ed25519 keypair in the format that Nix uses with `nix-store
+/// --generate-binary-cache-key`. Snix provides the counterpart of this, but
+/// it doesn't expose the key bytes, so we cannot use it to display the public
+/// key nicely.
 pub fn serialize_nix_store_signing_key(
     path: &std::path::Path,
-    name: &str,
-    key: ed25519_dalek::SigningKey,
-) -> Result<(), std::io::Error> {
-    let base64_keypair = BASE64_STANDARD.encode(key.to_keypair_bytes());
-    let nix_format = format!("{}:{}", name, base64_keypair);
-    std::fs::write(path, nix_format)?;
-    Ok(())
+    key: &CacheKeypair,
+) -> Result<(), Error> {
+    let base64_keypair = BASE64_STANDARD.encode(key.signing_key().to_keypair_bytes());
+    let nix_format = format!("{}:{}", key.name, base64_keypair);
+    std::fs::write(path, nix_format).map_err(Error::IOError)
+}
+
+/// Load a serialized nix store signing key from disk.
+/// The file has the format `<name>:encode_base64(<bytes>)`.
+pub fn deserialize_nix_store_signing_key(path: &std::path::Path) -> Result<CacheKeypair, Error> {
+    let input = std::fs::read_to_string(path).map_err(Error::IOError)?;
+
+    let (name, bytes64) = input.split_once(':').ok_or(Error::MissingSeparator)?;
+
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| char::is_alphanumeric(c) || c == '-' || c == '.')
+    {
+        return Err(Error::InvalidName(name.to_string()));
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(bytes64.as_bytes())
+        .map_err(Error::DecodeError)?;
+
+    let signing_key = CacheKeypair::new(
+        name,
+        Some(
+            ed25519_dalek::SigningKey::from_keypair_bytes(&bytes.try_into().unwrap())
+                .map_err(Error::InvalidVerifyingKey)?,
+        ),
+    );
+
+    Ok(signing_key)
 }

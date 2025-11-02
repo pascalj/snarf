@@ -5,21 +5,24 @@ use std::{
 
 use clap::Parser;
 
-use snarf::server::ServerState;
+use ed25519_dalek::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey};
+use snarf::server::{self, CacheKeypair};
 
-use tracing::{debug, info};
-
-use directories::ProjectDirs;
+use tracing::info;
 
 #[derive(Parser)]
 struct Arguments {
     /// The name of the cache, for example for signing info.
-    #[clap(short, long, default_value = "snarf")]
+    #[clap(long, default_value = "snarf")]
     cache_name: String,
 
     /// The path to the paseto key file as raw bytes.
-    #[arg(short, long, default_value = server_key_file_default())]
-    private_key_file: PathBuf,
+    #[arg(long, env, default_value = "/var/lib/snarf/paseto_keypair.key")]
+    paseto_key_file: PathBuf,
+
+    /// The path to the cache key file as created by `nix-store --generate-binary-cache-key`.
+    #[arg(long, env, default_value = "/var/lib/snarf/cache_keypair.key")]
+    cache_keypair_file: PathBuf,
 
     /// The Snix store service URLs that are used for the underlying store.
     /// TODO: have better default paths using ProjectDirs.
@@ -29,6 +32,40 @@ struct Arguments {
     /// The address to listen on.
     #[clap(flatten)]
     listen_args: tokio_listener::ListenerAddressLFlag,
+}
+
+fn load_paseto_keypair(
+    path: &Path,
+) -> Result<Option<server::PasetoKeypair>, ed25519_dalek::pkcs8::Error> {
+    if path.exists() {
+        return Ok(Some(
+            ed25519_dalek::SigningKey::read_pkcs8_der_file(path).unwrap(),
+        ));
+    }
+    Ok(None)
+}
+
+fn serialize_new_paseto_keypair(path: PathBuf) -> Result<server::PasetoKeypair, server::Error> {
+    use rand_core::OsRng;
+    let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+    key.write_pkcs8_der_file(path).unwrap();
+    Ok(key)
+}
+
+fn load_cache_keypair(path: &Path) -> Result<Option<server::CacheKeypair>, server::Error> {
+    if path.exists() {
+        let cache_key = server::deserialize_nix_store_signing_key(&path)?;
+        return Ok(Some(cache_key));
+    }
+    Ok(None)
+}
+
+fn serialize_new_cache_keypair(path: PathBuf) -> Result<server::CacheKeypair, server::Error> {
+    use rand_core::OsRng;
+    let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+    let cache_key = CacheKeypair::new("snarf".into(), Some(key));
+    server::serialize_nix_store_signing_key(&path, &cache_key)?;
+    Ok(cache_key)
 }
 
 #[tokio::main]
@@ -43,24 +80,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs).await?;
 
-    let server_state = if !std::fs::exists(&arguments.private_key_file)? {
-        ServerState::uninitialized(&arguments.private_key_file)
-    } else {
-        debug!(file=%arguments.private_key_file.display(),  "Reading keypair");
-        std::fs::read(arguments.private_key_file).and_then(|x| {
-            ServerState::try_from(x.as_slice()).map_err(|err| std::io::Error::other(err))
-        })?
-    };
+    let paseto_key = load_paseto_keypair(&arguments.paseto_key_file)
+        .or_else(|err| Some(serialize_new_paseto_keypair(arguments.paseto_key_file)).transpose())
+        .unwrap();
 
-    // For now we can just re-use the server's private key for signing.
-    // TODO: make this configurable to override with a different key
-    let signing_key =
-        nix_compat::narinfo::SigningKey::new(arguments.cache_name, server_state.signing_key());
+    let cache_key = load_cache_keypair(&arguments.cache_keypair_file)
+        .or_else(|err| Some(serialize_new_cache_keypair(arguments.cache_keypair_file)).transpose())
+        .unwrap()
+        .unwrap();
+
+    let server_state = server::ServerState::new(&paseto_key.unwrap(), &cache_key);
 
     // The signing_path_info service will sign only while serving new path_infos.
     let signing_path_info_service = Arc::new(snarf::server::LazySigningPathInfoService::new(
         path_info_service.clone(),
-        Arc::new(signing_key),
+        cache_key.clone(),
     ));
 
     // The management channels are used to fill the cache and potentially to configure
@@ -116,14 +150,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     Ok(())
-}
-
-/// The server key default path. It's a bit unwieldy. Revisit when https://github.com/clap-rs/clap/issues/4558 is fixed.
-fn server_key_file_default() -> String {
-    ProjectDirs::from("de.pascalj.snarf", "", "snarf")
-        .map(|dir| Path::join(dir.config_dir(), "server_key.bin"))
-        .expect("Unable to construct key path")
-        .to_str()
-        .unwrap_or("server_key.bin")
-        .to_owned()
 }
