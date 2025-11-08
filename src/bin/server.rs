@@ -10,6 +10,16 @@ use snarf::server::{self, CacheKeypair};
 
 use tracing::info;
 
+#[derive(thiserror::Error, Debug)]
+enum Error {
+    #[error("PKCS processing error: {0}")]
+    PKCS(ed25519_dalek::pkcs8::Error),
+    #[error("Snarf server error: {0}")]
+    Server(server::Error),
+    #[error("IO error: {0}")]
+    IO(std::io::Error),
+}
+
 #[derive(Parser)]
 struct Arguments {
     /// The name of the cache, for example for signing info.
@@ -34,37 +44,27 @@ struct Arguments {
     listen_args: tokio_listener::ListenerAddressLFlag,
 }
 
-fn load_paseto_keypair(
-    path: &Path,
-) -> Result<Option<server::PasetoKeypair>, ed25519_dalek::pkcs8::Error> {
-    if path.exists() {
-        return Ok(Some(
-            ed25519_dalek::SigningKey::read_pkcs8_der_file(path).unwrap(),
-        ));
-    }
-    Ok(None)
+fn load_paseto_keypair(path: &Path) -> Result<server::PasetoKeypair, Error> {
+    ed25519_dalek::SigningKey::read_pkcs8_der_file(path).map_err(&Error::PKCS)
 }
 
-fn serialize_new_paseto_keypair(path: PathBuf) -> Result<server::PasetoKeypair, server::Error> {
+fn serialize_new_paseto_keypair(path: PathBuf) -> Result<server::PasetoKeypair, Error> {
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(&Error::IO)?;
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    key.write_pkcs8_der_file(path).unwrap();
+    key.write_pkcs8_der_file(path).map_err(&Error::PKCS)?;
     Ok(key)
 }
 
-fn load_cache_keypair(path: &Path) -> Result<Option<server::CacheKeypair>, server::Error> {
-    if path.exists() {
-        let cache_key = server::deserialize_nix_store_signing_key(&path)?;
-        return Ok(Some(cache_key));
-    }
-    Ok(None)
+fn load_cache_keypair(path: &Path) -> Result<server::CacheKeypair, Error> {
+    server::deserialize_nix_store_signing_key(&path).map_err(&Error::Server)
 }
 
-fn serialize_new_cache_keypair(path: PathBuf) -> Result<server::CacheKeypair, server::Error> {
+fn serialize_new_cache_keypair(path: PathBuf) -> Result<server::CacheKeypair, Error> {
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
     let cache_key = CacheKeypair::new("snarf".into(), Some(key));
-    server::serialize_nix_store_signing_key(&path, &cache_key)?;
+    server::serialize_nix_store_signing_key(&path, &cache_key).map_err(&Error::Server)?;
     Ok(cache_key)
 }
 
@@ -80,16 +80,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs).await?;
 
-    let paseto_key = load_paseto_keypair(&arguments.paseto_key_file)
-        .or_else(|err| Some(serialize_new_paseto_keypair(arguments.paseto_key_file)).transpose())
-        .unwrap();
+    let paseto_key = if arguments.paseto_key_file.exists() {
+        load_paseto_keypair(&arguments.paseto_key_file)
+    } else {
+        serialize_new_paseto_keypair(arguments.paseto_key_file)
+    }?;
 
-    let cache_key = load_cache_keypair(&arguments.cache_keypair_file)
-        .or_else(|err| Some(serialize_new_cache_keypair(arguments.cache_keypair_file)).transpose())
-        .unwrap()
-        .unwrap();
+    let cache_key = if arguments.cache_keypair_file.exists() {
+        load_cache_keypair(&arguments.cache_keypair_file)
+    } else {
+        serialize_new_cache_keypair(arguments.cache_keypair_file)
+    }?;
 
-    let server_state = server::ServerState::new(&paseto_key.unwrap(), &cache_key);
+    let server_state = server::ServerState::new(&paseto_key, &cache_key);
 
     // The signing_path_info service will sign only while serving new path_infos.
     let signing_path_info_service = Arc::new(snarf::server::LazySigningPathInfoService::new(

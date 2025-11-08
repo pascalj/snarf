@@ -1,5 +1,4 @@
 use std::{
-    ops::Deref,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -7,7 +6,6 @@ use std::{
 use rand_core::OsRng;
 
 use base64::{DecodeError, prelude::*};
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH};
 use rusty_paseto::prelude::*;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
@@ -52,14 +50,21 @@ impl From<&CacheKeypair> for nix_compat::narinfo::SigningKey<ed25519_dalek::Sign
 
 pub type PasetoKeypair = ed25519_dalek::SigningKey;
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Signing key error: {0}")]
     SigningKeyError(nix_compat::narinfo::SigningKeyError),
+    #[error("IO error: {0}")]
     IOError(std::io::Error),
+    #[error("Invalid name: {0}")]
     InvalidName(String),
+    #[error("Invalid verifying key: {0}")]
     InvalidVerifyingKey(ed25519_dalek::SignatureError),
+    #[error("Deciding error: {0}")]
     DecodeError(DecodeError),
+    #[error("Invalid signing key lenght: {0}")]
     InvalidSigningKeyLen(usize),
+    #[error("Missing separator")]
     MissingSeparator,
 }
 
