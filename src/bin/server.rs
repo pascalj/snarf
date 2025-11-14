@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server_state = server::ServerState::new(&paseto_key, &cache_key);
 
     // The signing_path_info service will sign only while serving new path_infos.
-    let signing_path_info_service = Arc::new(snarf::server::LazySigningPathInfoService::new(
+    let signing_path_info_service = Arc::new(server::LazySigningPathInfoService::new(
         path_info_service.clone(),
         cache_key.clone(),
     ));
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nar_bridge_state = nar_bridge::AppState::new(
         blob_service.clone(),
         directory_service.clone(),
-        signing_path_info_service.clone(),
+        signing_path_info_service,
         std::num::NonZero::new(64usize).unwrap(),
     );
 
