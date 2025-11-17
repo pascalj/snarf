@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use futures::StreamExt;
 use rand_core::OsRng;
 
 use base64::{DecodeError, prelude::*};
@@ -76,8 +77,6 @@ pub enum ServerCommand {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 enum ServerInitialization {
-    /// The server is not initialized and does not have a secret key.
-    Uninitialized(PathBuf),
     /// The server loaded a serialized secret key and operates normally.
     Initialized,
     /// The server was initialized but still needs to serialize the key.
@@ -106,19 +105,7 @@ impl ServerState {
         }
     }
     /// Renew the signing key
-    pub fn initialize_signing_key(&mut self) {
-        match &self.initialization {
-            ServerInitialization::Uninitialized(out_path) => {
-                self.paseto_keypair = PasetoKeypair::generate(&mut OsRng);
-                if let Ok(_) = self.write_key(&out_path) {
-                    self.initialization = ServerInitialization::NewlyInitialized;
-                } else {
-                    error!("Unable to create the key file");
-                }
-            }
-            _ => assert!(false, "Cannot initialize an already initialized server."),
-        }
-    }
+    pub fn initialize_signing_key(&mut self) {}
 
     fn write_key(&self, out_path: &PathBuf) -> std::result::Result<(), std::io::Error> {
         if let Some(parent) = out_path.parent() {
@@ -315,14 +302,14 @@ pub fn server_routes(
     .add_service(
         snix_store::proto::path_info_service_server::PathInfoServiceServer::with_interceptor(
             snix_store::proto::GRPCPathInfoServiceWrapper::new(
-                path_info_service,
+                path_info_service.clone(),
                 nar_calculation_service,
             ),
             PasetoAuthInterceptor::from(server_state),
         ),
     )
     .add_service(management_service_server::ManagementServiceServer::new(
-        ManagementServiceServer::new(command_channel, server_state),
+        ManagementServiceServer::new(command_channel, server_state, path_info_service),
     ))
 }
 
@@ -330,13 +317,19 @@ pub fn server_routes(
 pub struct ManagementServiceServer {
     server_state: ServerState,
     command_channel: mpsc::Sender<ServerCommand>,
+    path_info_service: Arc<dyn PathInfoService>,
 }
 
 impl ManagementServiceServer {
-    fn new(command_channel: &mpsc::Sender<ServerCommand>, server_state: &ServerState) -> Self {
+    fn new(
+        command_channel: &mpsc::Sender<ServerCommand>,
+        server_state: &ServerState,
+        path_info_service: Arc<dyn PathInfoService>,
+    ) -> Self {
         Self {
             command_channel: command_channel.clone(),
             server_state: server_state.clone(),
+            path_info_service: path_info_service.clone(),
         }
     }
 }
@@ -347,30 +340,19 @@ impl management_service_server::ManagementService for ManagementServiceServer {
         &self,
         _: tonic::Request<NewClientTokenRequest>,
     ) -> Result<tonic::Response<ClientToken>, tonic::Status> {
-        let mut state = self.server_state.clone();
-
-        match state.initialization {
-            ServerInitialization::Uninitialized(_) => {
-                info!("Generating new admin token");
-                state.initialize_signing_key();
-                let token = state.public_token();
-
-                self.command_channel
-                    .send(ServerCommand::UpdateState(state))
-                    .await
-                    .unwrap();
-
-                Ok(tonic::Response::new(ClientToken {
-                    token: token.map_err(|_| {
-                        tonic::Status::internal("Unable to generate token from state")
-                    })?,
-                }))
-            }
-
-            _ => Err(tonic::Status::permission_denied(
+        // TODO: check token
+        if self.path_info_service.list().next().await.is_some() {
+            return Err(tonic::Status::permission_denied(
                 "Server is already initialized",
-            )),
+            ));
         }
+
+        Ok(tonic::Response::new(ClientToken {
+            token: self
+                .server_state
+                .public_token()
+                .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
+        }))
     }
 }
 
