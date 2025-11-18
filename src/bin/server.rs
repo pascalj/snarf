@@ -100,7 +100,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let do_shutdown = Arc::new(std::sync::Mutex::new(false));
 
         let do_shutdown_copy = do_shutdown.clone();
-        let new_server_state_copy = new_server_state.clone();
         let shutdown = async move {
             info!("Press Cltr-C for graceful shutdown.");
             tokio::select! {
@@ -109,7 +108,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
                 action = command_receiver.recv() => {
                     match action {
-                        Some(ServerCommand::UpdateState(state)) => { *new_server_state_copy.lock().unwrap() = state },
                         Some(ServerCommand::Shutdown) => {
                             *do_shutdown_copy.lock().unwrap() = false;
                         },

@@ -1,10 +1,6 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::sync::Arc;
 
 use futures::StreamExt;
-use rand_core::OsRng;
 
 use base64::{DecodeError, prelude::*};
 use rusty_paseto::prelude::*;
@@ -15,7 +11,7 @@ use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 use tokio::sync::mpsc;
 use tonic::{async_trait, service::Interceptor};
 
-use tracing::{error, info};
+use tracing::error;
 
 tonic::include_proto!("snarf.v1");
 
@@ -71,56 +67,29 @@ pub enum Error {
 }
 
 pub enum ServerCommand {
-    UpdateState(ServerState),
     Shutdown,
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-enum ServerInitialization {
-    /// The server loaded a serialized secret key and operates normally.
-    Initialized,
-    /// The server was initialized but still needs to serialize the key.
-    NewlyInitialized,
 }
 
 /// State that is needed to perform operations on the PASETO tokens.
 #[derive(Clone)]
 pub struct ServerState {
-    initialization: ServerInitialization,
-
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
     paseto_keypair: PasetoKeypair,
 
     /// The key that is used for signing the narinfo.
-    cache_keypair: CacheKeypair,
+    _cache_keypair: CacheKeypair,
 }
 
 impl ServerState {
     pub fn new(paseto_keypair: &PasetoKeypair, cache_keypair: &CacheKeypair) -> ServerState {
         Self {
-            initialization: ServerInitialization::Initialized,
             paseto_keypair: paseto_keypair.clone(),
-            cache_keypair: cache_keypair.clone(),
+            _cache_keypair: cache_keypair.clone(),
         }
     }
     /// Renew the signing key
     pub fn initialize_signing_key(&mut self) {}
-
-    fn write_key(&self, out_path: &PathBuf) -> std::result::Result<(), std::io::Error> {
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)?;
-            // TODO: save in nix-compatible form (name:base64)
-            std::fs::write(out_path.clone(), self.key_bytes())?;
-        }
-
-        info!(
-            file=%out_path.display(),
-            "Generated and wrote a new private key",
-        );
-
-        Ok(())
-    }
 
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> Result<String, rusty_paseto::prelude::GenericBuilderError> {
@@ -316,7 +285,7 @@ pub fn server_routes(
 #[derive(Clone)]
 pub struct ManagementServiceServer {
     server_state: ServerState,
-    command_channel: mpsc::Sender<ServerCommand>,
+    _command_channel: mpsc::Sender<ServerCommand>,
     path_info_service: Arc<dyn PathInfoService>,
 }
 
@@ -327,8 +296,8 @@ impl ManagementServiceServer {
         path_info_service: Arc<dyn PathInfoService>,
     ) -> Self {
         Self {
-            command_channel: command_channel.clone(),
             server_state: server_state.clone(),
+            _command_channel: command_channel.clone(),
             path_info_service: path_info_service.clone(),
         }
     }
