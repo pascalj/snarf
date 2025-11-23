@@ -114,11 +114,10 @@ impl ServerState {
     /// just checks whether it is a valid token, no claims are checked at all.
     pub fn verify_token(&self, token: &str) -> bool {
         let public_key =
-            rusty_paseto::core::Key::<32>::try_from(self.paseto_keypair.verifying_key().as_bytes())
-                .expect("The siging_key is not a valid key");
+            rusty_paseto::core::Key::<32>::from(self.paseto_keypair.verifying_key().as_bytes());
         let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
         rusty_paseto::prelude::GenericParser::<V4, Public>::default()
-            .parse(&token, &paseto_public_key)
+            .parse(token, &paseto_public_key)
             .is_ok()
     }
 

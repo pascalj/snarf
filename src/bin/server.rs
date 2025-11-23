@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 #[derive(thiserror::Error, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 enum Error {
     #[error("PKCS processing error: {0}")]
     PKCS(ed25519_dalek::pkcs8::Error),
@@ -47,26 +48,26 @@ struct Arguments {
 }
 
 fn load_paseto_keypair(path: &Path) -> Result<server::PasetoKeypair, Error> {
-    ed25519_dalek::SigningKey::read_pkcs8_der_file(path).map_err(&Error::PKCS)
+    ed25519_dalek::SigningKey::read_pkcs8_der_file(path).map_err(Error::PKCS)
 }
 
 fn serialize_new_paseto_keypair(path: PathBuf) -> Result<server::PasetoKeypair, Error> {
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(&Error::IO)?;
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(Error::IO)?;
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    key.write_pkcs8_der_file(path).map_err(&Error::PKCS)?;
+    key.write_pkcs8_der_file(path).map_err(Error::PKCS)?;
     Ok(key)
 }
 
 fn load_cache_keypair(path: &Path) -> Result<server::CacheKeypair, Error> {
-    server::deserialize_nix_store_signing_key(&path).map_err(&Error::Server)
+    server::deserialize_nix_store_signing_key(path).map_err(Error::Server)
 }
 
 fn serialize_new_cache_keypair(path: PathBuf) -> Result<server::CacheKeypair, Error> {
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    let cache_key = CacheKeypair::new("snarf".into(), Some(key));
-    server::serialize_nix_store_signing_key(&path, &cache_key).map_err(&Error::Server)?;
+    let cache_key = CacheKeypair::new("snarf", Some(key));
+    server::serialize_nix_store_signing_key(&path, &cache_key).map_err(Error::Server)?;
     Ok(cache_key)
 }
 

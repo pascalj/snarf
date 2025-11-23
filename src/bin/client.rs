@@ -100,11 +100,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|elem| {
                     let path_info_service = path_info_service.clone();
                     async move {
-                        let resp = path_info_service
+                        path_info_service
                             .get(*elem.path.digest())
                             .await
-                            .map(|resp| (elem, resp));
-                        resp
+                            .map(|resp| (elem, resp))
                     }
                 })
                 .buffer_unordered(50)
