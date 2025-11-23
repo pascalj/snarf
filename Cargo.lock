@@ -191,7 +191,7 @@ version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "107a4e9d9cab9963e04e84bb8dee0e25f2a987f9a8bad5ed054abd439caa8f8c"
 dependencies = [
- "bindgen",
+ "bindgen 0.72.1",
  "cc",
  "cmake",
  "dunce",
@@ -392,6 +392,26 @@ dependencies = [
  "tonic 0.13.1",
  "tonic-build 0.13.1",
  "tower 0.5.2",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.71.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+dependencies = [
+ "bitflags 2.9.4",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.13.0",
+ "log",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash",
+ "shlex",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -3361,12 +3381,14 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.6",
  "base64",
+ "bindgen 0.71.1",
  "clap",
  "directories",
  "ed25519-dalek",
  "futures",
  "nar-bridge",
  "nix-compat",
+ "pkg-config",
  "prost",
  "rand_core 0.6.4",
  "rusty_paseto",

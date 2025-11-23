@@ -3,12 +3,14 @@
     crane.url = "github:ipetkov/crane";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
+    nix-src.url = "github:nixos/nix?ref=master";
   };
 
   outputs =
     {
       self,
       nixpkgs,
+      nix-src,
       utils,
       crane,
     }:
@@ -17,6 +19,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
         craneLib = crane.mkLib pkgs;
+        nix = nix-src.packages.${system}.nix;
       in
       {
         defaultPackage = pkgs.rustPlatform.buildRustPackage {
@@ -47,6 +50,7 @@
             cargo
             runc
             rustc
+            nix.dev
             rustfmt
             pre-commit
             rustPackages.clippy
@@ -58,7 +62,14 @@
           ];
         };
 
-        devShells.default = craneLib.devShell { packages = [ pkgs.protobuf ]; };
+        devShells.default = craneLib.devShell {
+          LIBCLANG_PATH = "${pkgs.llvmPackages_21.libclang.lib}/lib";
+          packages = [
+            nix.dev
+            pkgs.protobuf
+            pkgs.pkg-config
+          ];
+        };
       }
     );
 }
