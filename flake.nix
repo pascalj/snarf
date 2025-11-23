@@ -58,7 +58,7 @@
           ];
         };
 
-        devShells.defaulf = craneLib.devShell { };
+        devShells.default = craneLib.devShell { packages = [ pkgs.protobuf ]; };
       }
     );
 }
