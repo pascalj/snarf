@@ -21,7 +21,11 @@ pub struct CacheKeypair {
     pub signing_key: ed25519_dalek::SigningKey,
 }
 
+/// A keypair for signing the cache's contents
+///
+/// This is not to be confused with the keys to authorize remote actions on the keys, which is done via the PasetoKeypair.
 impl CacheKeypair {
+    /// Create a new keypair, possibly from an existing ed25519 key. If the key is not given, a new one is generated.
     pub fn new(name: &str, signing_key: Option<ed25519_dalek::SigningKey>) -> Self {
         use rand_core::OsRng;
         Self {
@@ -30,6 +34,7 @@ impl CacheKeypair {
         }
     }
 
+    /// Return the key for signing NARs in the store.
     pub fn signing_key(&self) -> &ed25519_dalek::SigningKey {
         &self.signing_key
     }
