@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -6,6 +7,8 @@ use serde::Serialize;
 use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
+
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 use tracing::{debug, info};
 
@@ -118,23 +121,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .await?;
 
             debug!(missing=%elems.len(), "Parsed elements from the reference graph");
+            let total_size = elems.iter().map(|elem| elem.nar_size).sum();
+            let pb = ProgressBar::new(total_size);
+            pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+                .progress_chars("#>-"));
 
             // Run ingest_path on all of them.
             // TODO: rework this for progress metering
             let uploads: Vec<_> = futures::stream::iter(elems)
                 .map(|elem| {
+                    let size = elem.nar_size;
                     // Map to a future returning the root node, alongside with the closure info.
                     let blob_service = blob_service.clone();
                     let directory_service = directory_service.clone();
+                    let pb = pb.clone();
                     async move {
-                        snix_castore::import::fs::ingest_path::<_, _, _, &[u8]>(
+                        let result = snix_castore::import::fs::ingest_path::<_, _, _, &[u8]>(
                             blob_service,
                             directory_service,
                             PathBuf::from(elem.path.to_absolute_path()),
                             None,
                         )
                         .await
-                        .map(|root_node| (elem, root_node))
+                        .map(|root_node| (elem, root_node));
+                        pb.inc(size);
+                        result
                     }
                 })
                 .buffer_unordered(10)
@@ -164,9 +177,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 };
 
                 path_info_service.put(path_info).await?;
+                pb.inc(1);
             }
 
-            info!("Uploaded PathInfo entries");
+            pb.finish_with_message("Uploaded PathInfo entries");
         }
         ClientCommand::CreateToken => {
             let mut client = management_service_client::ManagementServiceClient::connect(format!(

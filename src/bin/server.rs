@@ -10,7 +10,7 @@ use snarf::server::{self, CacheKeypair, ServerCommand};
 
 use tokio::sync::mpsc;
 
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(thiserror::Error, Debug)]
 #[allow(clippy::upper_case_acronyms)]
@@ -127,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ));
 
         let server_state = new_server_state.clone().lock().unwrap().clone();
+        debug!("Public key: {}", server_state.public_token().unwrap());
 
         // The management channels are used to fill the cache and potentially to configure
         // it, authenticated.
