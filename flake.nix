@@ -2,24 +2,27 @@
   inputs = {
     crane.url = "github:ipetkov/crane";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      utils,
       crane,
     }:
-    utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        craneLib = crane.mkLib pkgs;
-      in
-      {
-        defaultPackage = pkgs.rustPlatform.buildRustPackage {
+    let
+      forAllSystems =
+        function:
+        nixpkgs.lib.genAttrs [
+          "x86_64-linux"
+          "aarch64-linux"
+          "aarch64-darwin"
+        ] (system: function nixpkgs.legacyPackages.${system});
+    in
+    {
+      defaultPackage = forAllSystems (
+        pkgs:
+        pkgs.rustPlatform.buildRustPackage {
 
           pname = "snarf";
           version = "0.0.1";
@@ -56,9 +59,11 @@
           nativeBuildInputs = with pkgs; [
             protobuf
           ];
-        };
+        }
+      );
 
-        devShells.default = craneLib.devShell { packages = [ pkgs.protobuf ]; };
-      }
-    );
+      devShells = forAllSystems (pkgs: {
+        default = (crane.mkLib pkgs).craneLib.devShell { packages = [ pkgs.protobuf ]; };
+      });
+    };
 }
