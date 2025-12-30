@@ -20,9 +20,8 @@
         ] (system: function nixpkgs.legacyPackages.${system});
     in
     {
-      defaultPackage = forAllSystems (
-        pkgs:
-        pkgs.rustPlatform.buildRustPackage {
+      packages = forAllSystems (pkgs: {
+        default = pkgs.rustPlatform.buildRustPackage {
 
           pname = "snarf";
           version = "0.0.1";
@@ -73,8 +72,33 @@
           nativeBuildInputs = with pkgs; [
             protobuf
           ];
-        }
-      );
+
+          dontUsePytestCheck = "please dont";
+        };
+      });
+
+      nixosModules = {
+        snarf = import ./module.nix self;
+        default = self.nixosModules.snarf;
+      };
+
+      checks = forAllSystems (pkgs: {
+        demo = pkgs.testers.runNixOSTest {
+          name = "snarf-dummy";
+          nodes.machine =
+            { config, pkgs, ... }:
+            {
+              services.getty.autologinUser = "root";
+              imports = [
+                self.nixosModules.default
+              ];
+            };
+          testScript = ''
+            machine.wait_for_unit("default.target")
+            machine.wait_for_unit("snarf.service")
+          '';
+        };
+      });
 
       devShells = forAllSystems (pkgs: {
         default = (crane.mkLib pkgs).craneLib.devShell { packages = [ pkgs.protobuf ]; };
