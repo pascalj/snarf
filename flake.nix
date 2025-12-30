@@ -29,6 +29,22 @@
 
           src = pkgs.lib.cleanSource ./.;
 
+          # Copy over the proto files from snix. See devenv:
+          # https://github.com/cachix/devenv/blob/a949ae71fdbcdbdc76c0b191e1db9d3e0d8c86eb/devenv/package.nix#L43C1-L54C6
+          postConfigure = ''
+            pushd "$NIX_BUILD_TOP/cargo-vendor-dir"
+            mkdir -p snix/{castore,store,build}/protos
+
+            [ -d snix-castore-*/protos ] && cp snix-castore-*/protos/*.proto snix/castore/protos/ 2>/dev/null || true
+            [ -d snix-store-*/protos ] && cp snix-store-*/protos/*.proto snix/store/protos/ 2>/dev/null || true
+            [ -d snix-build-*/protos ] && cp snix-build-*/protos/*.proto snix/build/protos/ 2>/dev/null || true
+
+            popd
+          '';
+          preBuild = ''
+            export PROTO_ROOT="$NIX_BUILD_TOP/cargo-vendor-dir"
+          '';
+
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes = {
@@ -38,14 +54,12 @@
           };
 
           meta = with pkgs.lib; {
-            description = "A fast line-oriented regex search tool, similar to ag and ack";
-            homepage = "https://github.com/BurntSushi/ripgrep";
-            license = licenses.unlicense;
+            description = "A Snix-based Nix binary cache";
+            homepage = "https://github.com/pascalj/snarf";
+            license = licenses.gpl3;
             maintainers = [ ];
           };
 
-          # RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
-          # pkgs.rustPlatform.rustLibSrc
           buildInputs = with pkgs; [
             cargo
             runc
