@@ -26,7 +26,12 @@
           pname = "snarf";
           version = "0.0.1";
 
-          src = pkgs.lib.cleanSource ./.;
+          src = pkgs.lib.sourceFilesBySuffices ./. [
+            "Cargo.lock"
+            "Cargo.toml"
+            ".rs"
+            ".proto"
+          ];
 
           # Copy over the proto files from snix. See devenv:
           # https://github.com/cachix/devenv/blob/a949ae71fdbcdbdc76c0b191e1db9d3e0d8c86eb/devenv/package.nix#L43C1-L54C6
@@ -73,7 +78,7 @@
             protobuf
           ];
 
-          dontUsePytestCheck = "please dont";
+          dontUsePytestCheck = "do not run";
         };
       });
 
@@ -83,18 +88,17 @@
       };
 
       checks = forAllSystems (pkgs: {
-        demo = pkgs.testers.runNixOSTest {
+        # Test whether the service successfully starts
+        smoke = pkgs.testers.runNixOSTest {
           name = "snarf-dummy";
           nodes.machine =
-            { config, pkgs, ... }:
+            { ... }:
             {
-              services.getty.autologinUser = "root";
               imports = [
                 self.nixosModules.default
               ];
             };
           testScript = ''
-            machine.wait_for_unit("default.target")
             machine.wait_for_unit("snarf.service")
           '';
         };
