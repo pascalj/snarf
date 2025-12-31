@@ -23,6 +23,58 @@ enum Error {
     IO(std::io::Error),
 }
 
+/// Arguments to configure the snix-castore services with customized defaults.
+#[derive(clap::Parser, Clone)]
+#[group(id = "CastoreServiceUrls")]
+pub struct CastoreServiceUrls {
+    #[arg(
+        long,
+        env,
+        default_value = "objectstore+file:///var/lib/snarf/snix-castore/blobs"
+    )]
+    pub blob_service_addr: String,
+
+    #[arg(
+        long,
+        env,
+        default_value = "redb:///var/lib/snarf/snix-castore/directories.redb"
+    )]
+    pub directory_service_addr: String,
+}
+
+/// Arguments to configure the snix-store services with customized defaults.
+#[derive(clap::Parser, Clone)]
+#[group(id = "StoreServiceUrls")]
+pub struct ServiceUrls {
+    #[clap(flatten)]
+    pub castore_service_addrs: CastoreServiceUrls,
+
+    #[arg(
+        long,
+        env,
+        default_value = "redb:///var/lib/snarf/snix-store/pathinfo.redb"
+    )]
+    pub path_info_service_addr: String,
+}
+
+impl From<CastoreServiceUrls> for snix_castore::utils::ServiceUrls {
+    fn from(urls: CastoreServiceUrls) -> snix_castore::utils::ServiceUrls {
+        snix_castore::utils::ServiceUrls {
+            blob_service_addr: urls.blob_service_addr,
+            directory_service_addr: urls.directory_service_addr,
+        }
+    }
+}
+
+impl From<ServiceUrls> for snix_store::utils::ServiceUrls {
+    fn from(urls: ServiceUrls) -> snix_store::utils::ServiceUrls {
+        snix_store::utils::ServiceUrls {
+            castore_service_addrs: urls.castore_service_addrs.into(),
+            path_info_service_addr: urls.path_info_service_addr,
+        }
+    }
+}
+
 #[derive(Parser)]
 struct Arguments {
     /// The name of the cache, for example for signing info.
@@ -38,9 +90,8 @@ struct Arguments {
     cache_keypair_file: PathBuf,
 
     /// The Snix store service URLs that are used for the underlying store.
-    /// TODO: have better default paths using ProjectDirs.
     #[clap(flatten)]
-    service_addrs: snix_store::utils::ServiceUrls,
+    service_addrs: ServiceUrls,
 
     /// The address to listen on.
     #[clap(flatten)]
