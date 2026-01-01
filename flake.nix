@@ -71,11 +71,15 @@
             rustfmt
             pre-commit
             rustPackages.clippy
+            pkg-config
+            sqlite
             protobuf
           ];
 
           nativeBuildInputs = with pkgs; [
             protobuf
+            pkg-config
+            sqlite
           ];
 
           dontUsePytestCheck = "do not run";
@@ -105,7 +109,12 @@
       });
 
       devShells = forAllSystems (pkgs: {
-        default = (crane.mkLib pkgs).craneLib.devShell { packages = [ pkgs.protobuf ]; };
+        default = (crane.mkLib pkgs).craneLib.devShell {
+          packages = [
+            pkgs.protobuf
+            pkgs.sqlite.dev
+          ];
+        };
       });
     };
 }
