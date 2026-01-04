@@ -24,7 +24,7 @@
         default = pkgs.rustPlatform.buildRustPackage {
 
           pname = "snarf";
-          version = "0.0.1";
+          version = "0.1.0";
 
           src = pkgs.lib.sourceFilesBySuffices ./. [
             "Cargo.lock"
