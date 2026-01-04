@@ -93,18 +93,38 @@
 
       checks = forAllSystems (pkgs: {
         # Test whether the service successfully starts
-        smoke = pkgs.testers.runNixOSTest {
-          name = "snarf-dummy";
-          nodes.machine =
-            { ... }:
-            {
-              imports = [
-                self.nixosModules.default
-              ];
-              services.snarf.enable = true;
-            };
+        create-token = pkgs.testers.runNixOSTest {
+          name = "snarf-create-token";
+          nodes = {
+            snarfd =
+              { ... }:
+              {
+                imports = [
+                  self.nixosModules.default
+                ];
+                services.snarf = {
+                  enable = true;
+                  listenAddress = "0.0.0.0";
+                  openFirewall = true;
+                };
+
+              };
+            snarf =
+              { pkgs, ... }:
+              {
+                imports = [
+                  self.nixosModules.default
+                ];
+                environment.systemPackages = [
+                  self.packages.${pkgs.system}.default
+                ];
+              };
+          };
           testScript = ''
-            machine.wait_for_unit("snarf.service")
+            snarfd.wait_for_unit("snarf.service")
+
+            snarf.wait_for_unit("default.target")
+            snarf.succeed("snarf -s snarfd:9000 create-token")
           '';
         };
       });

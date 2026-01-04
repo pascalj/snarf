@@ -13,7 +13,7 @@ in
   options.services.snarf = with lib; {
     enable = lib.mkEnableOption "snarf Nix binary cache server";
 
-    listen_address = mkOption {
+    listenAddress = mkOption {
       default = "127.0.0.1";
       type = types.str;
       description = "The ip address to listen on";
@@ -22,6 +22,11 @@ in
       default = 9000;
       type = types.port;
       description = "The port to listen on";
+    };
+    openFirewall = mkOption {
+      default = false;
+      type = types.bool;
+      description = "Whether to open the firewall on snarf's listening port";
     };
     blob_service = mkOption {
       default = null;
@@ -57,7 +62,7 @@ in
       description = "The snarf Nix binary cache server";
       serviceConfig = {
         ExecStart =
-          "${self.packages.${pkgs.system}.default}/bin/snarfd -l ${cfg.listen_address}:${toString cfg.port}"
+          "${self.packages.${pkgs.system}.default}/bin/snarfd -l ${cfg.listenAddress}:${toString cfg.port}"
           + lib.optionalString (cfg.blob_service != null) " --blob-service-addr ${cfg.blob_service}"
           + lib.optionalString (
             cfg.directory_service != null
@@ -67,6 +72,11 @@ in
         DynamicUser = true;
         StateDirectory = "snarf";
       };
+    };
+    networking.firewall = lib.mkIf cfg.openFirewall {
+      allowedTCPPorts = [
+        cfg.port
+      ];
     };
   };
 }
