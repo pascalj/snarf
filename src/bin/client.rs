@@ -14,18 +14,18 @@ tonic::include_proto!("snarf.v1");
 enum ClientCommand {
     /// Add files from a local Nix store to the cache
     AddClosure {
+        /// The authentication token
+        #[arg(short, long, env = "SNARF_CLIENT_TOKEN", required = true)]
+        token: String,
         store_path: PathBuf,
     },
+    /// Create a new token on a freshly initialized server
     CreateToken,
 }
 
 /// CLI arguments for the client
 #[derive(Parser)]
 struct ClientCli {
-    /// The authentication token
-    #[arg(short, long, env = "SNARF_CLIENT_TOKEN")]
-    token: String,
-
     /// The server address, currently expecting grpc+http as a protocol, but
     /// that is likely to change to make it easier for users.
     #[arg(
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn add_closure(
     client_cli: &ClientCli,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ClientCommand::AddClosure { store_path } = &client_cli.command else {
+    let ClientCommand::AddClosure { token, store_path } = &client_cli.command else {
         return Ok(());
     };
 
@@ -73,7 +73,7 @@ async fn add_closure(
     let url = url::Url::parse(format!("grpc+http://{}", client_cli.server_address).as_ref())?;
 
     let (blob_service, directory_service, path_info_service) =
-        snarf::client::clients(client_cli.token.as_ref(), &url).await?;
+        snarf::client::clients(token, &url).await?;
 
     let elems: Vec<_> = futures::stream::iter(closure.all_path_infos())
         .map(|elem| {
