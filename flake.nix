@@ -101,6 +101,7 @@
               imports = [
                 self.nixosModules.default
               ];
+              services.snarf.enable = true;
             };
           testScript = ''
             machine.wait_for_unit("snarf.service")
