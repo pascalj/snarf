@@ -4,7 +4,7 @@ Snarf is a small and flexible Nix binary (NAR) cache based on [Snix](https://sni
 
 ## Status
 
-The project is not ready for production use, but it is functional as a basic cache: please try Snarf and report any issues here. A rough roadmap is below:
+The project is not ready for production use, but it is functional as a basic cache: please give Snarf a try and report any issues here. A rough roadmap is below:
 
 - [x] `snarfd` server wraps Snix' nar-bridge.
 - [x] `snarf` client to perform uploads
@@ -67,7 +67,8 @@ Deploy the configuration and verify that the server is started with `systemctl s
 First, you need to initialize the server. The client is authenticated via a token when it uploads store paths to the server. When the server first boots up, it is in an uninitialized state. Initialize the admin token by executing the following:
 
 ```sh
-$ snarf -s <server-host>:9000 create-token
+$ export SNARF_SERVER_ADDRESS="<your-server-host>:9000"
+$ snarf -s create-token
 ```
 
 Set the environment variable `SNARF_CLIENT_TOKEN` to the token returned by the `create-token` command. 
@@ -75,7 +76,7 @@ Set the environment variable `SNARF_CLIENT_TOKEN` to the token returned by the `
 Second, upload the closure of a path by executing
 
 ```sh
-$ snarf -s <server-host>:9000 add-closure /nix/store/...
+$ snarf add-closure /nix/store/...
 ```
 
 Currently, Snarf uses Nix' sqlite database to compute the closure.
@@ -87,7 +88,7 @@ Currently, Snarf uses Nix' sqlite database to compute the closure.
 
 ### Structure
 
-Currently, the server binary combines a `snix-store` and the `nar-bridge` functionality. The former part is authenticated via PASETO tokens and can be connected to by providing valid PASETO tokens.
+The server binary combines a `snix-store` and the `nar-bridge` functionality. The former part is authenticated via PASETO tokens and can be connected to by providing valid PASETO tokens.
 For a Nix user, the server looks like a normal Nix binary cache. For authenticated users, it is an extended Snix store that manages the data.
 
 ## Contributing
