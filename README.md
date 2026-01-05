@@ -1,4 +1,4 @@
-# Snarf
+# Snarf [![Test status](https://github.com/pascalj/snarf/actions/workflows/test.yml/badge.svg)](https://github.com/pascalj/snarf/actions/workflows/test.yml)
 
 Snarf is a small and flexible Nix binary (NAR) cache based on [Snix](https://snix.dev). It consists of a server and a client to upload NAR data and manage the server.
 
