@@ -68,7 +68,7 @@ async fn add_closure(
     };
 
     let store_path = StorePathRef::from_absolute_path_full(&store_path)?;
-    let closure = snarf::database::Closure::for_path(store_path.0)?;
+    let closure = snarf::nix_database::Closure::for_path(store_path.0)?;
 
     let url = url::Url::parse(format!("grpc+http://{}", client_cli.server_address).as_ref())?;
 
