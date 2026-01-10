@@ -7,6 +7,7 @@ use clap::Parser;
 
 use ed25519_dalek::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey};
 use snarf::server::{self, CacheKeypair, ServerCommand};
+use snarf::{database::snarf::connect_database, server::ServerState};
 
 use tokio::sync::mpsc;
 
@@ -99,7 +100,7 @@ fn serialize_new_paseto_keypair(path: PathBuf) -> anyhow::Result<server::PasetoK
     Ok(key)
 }
 
-fn serialize_new_cache_keypair(path: PathBuf) -> anyhow::Result<server::CacheKeypair> {
+fn serialize_new_cache_keypair(path: PathBuf) -> anyhow::Result<server::CacheKey> {
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
     let cache_key = CacheKeypair::new("snarf", Some(key));
@@ -127,9 +128,9 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
     } else {
         serialize_new_cache_keypair(arguments.cache_keypair_file)
     }?;
-    let new_server_state = Arc::new(std::sync::Mutex::new(server::ServerState::new(
-        &paseto_key,
-        &cache_key,
+    let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
+    let new_server_state = Arc::new(std::sync::Mutex::new(ServerState::from_database(
+        db_connection,
     )));
 
     loop {
@@ -162,7 +163,7 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
             cache_key.clone(),
         ));
 
-        let server_state = new_server_state.clone().lock().unwrap().clone();
+        let server_state = new_server_state.clone().lock()?.clone();
 
         // The management channels are used to fill the cache and potentially to configure
         // it, authenticated.
