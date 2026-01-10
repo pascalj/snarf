@@ -12,17 +12,6 @@ use tokio::sync::mpsc;
 
 use tracing::info;
 
-#[derive(thiserror::Error, Debug)]
-#[allow(clippy::upper_case_acronyms)]
-enum Error {
-    #[error("PKCS processing error: {0}")]
-    PKCS(ed25519_dalek::pkcs8::Error),
-    #[error("Snarf server error: {0}")]
-    Server(server::Error),
-    #[error("IO error: {0}")]
-    IO(std::io::Error),
-}
-
 /// Arguments to configure the snix-castore services with customized defaults.
 #[derive(clap::Parser, Clone)]
 #[group(id = "CastoreServiceUrls")]
@@ -98,32 +87,28 @@ struct Arguments {
     listen_args: tokio_listener::ListenerAddressLFlag,
 }
 
-fn load_paseto_keypair(path: &Path) -> Result<server::PasetoKeypair, Error> {
-    ed25519_dalek::SigningKey::read_pkcs8_der_file(path).map_err(Error::PKCS)
+fn load_paseto_keypair(path: &Path) -> anyhow::Result<server::PasetoKeypair> {
+    Ok(ed25519_dalek::SigningKey::read_pkcs8_der_file(path)?)
 }
 
-fn serialize_new_paseto_keypair(path: PathBuf) -> Result<server::PasetoKeypair, Error> {
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(Error::IO)?;
+fn serialize_new_paseto_keypair(path: PathBuf) -> anyhow::Result<server::PasetoKeypair> {
+    std::fs::create_dir_all(path.parent().unwrap())?;
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    key.write_pkcs8_der_file(path).map_err(Error::PKCS)?;
+    key.write_pkcs8_der_file(path)?;
     Ok(key)
 }
 
-fn load_cache_keypair(path: &Path) -> Result<server::CacheKeypair, Error> {
-    server::deserialize_nix_store_signing_key(path).map_err(Error::Server)
-}
-
-fn serialize_new_cache_keypair(path: PathBuf) -> Result<server::CacheKeypair, Error> {
+fn serialize_new_cache_keypair(path: PathBuf) -> anyhow::Result<server::CacheKeypair> {
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
     let cache_key = CacheKeypair::new("snarf", Some(key));
-    server::serialize_nix_store_signing_key(&path, &cache_key).map_err(Error::Server)?;
+    server::serialize_nix_store_signing_key(&path, &cache_key)?;
     Ok(cache_key)
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Add some logging for the moment
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // use RUST_LOG or fallback
@@ -138,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }?;
 
     let cache_key = if arguments.cache_keypair_file.exists() {
-        load_cache_keypair(&arguments.cache_keypair_file)
+        server::deserialize_nix_store_signing_key(&arguments.cache_keypair_file)
     } else {
         serialize_new_cache_keypair(arguments.cache_keypair_file)
     }?;

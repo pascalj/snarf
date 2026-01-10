@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use anyhow::bail;
 use futures::StreamExt;
 
-use base64::{DecodeError, prelude::*};
+use base64::prelude::*;
 use rusty_paseto::prelude::*;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
@@ -10,8 +11,6 @@ use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 
 use tokio::sync::mpsc;
 use tonic::{async_trait, service::Interceptor};
-
-use tracing::error;
 
 tonic::include_proto!("snarf.v1");
 
@@ -53,24 +52,6 @@ impl From<&CacheKeypair> for nix_compat::narinfo::SigningKey<ed25519_dalek::Sign
 
 pub type PasetoKeypair = ed25519_dalek::SigningKey;
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("Signing key error: {0}")]
-    SigningKeyError(nix_compat::narinfo::SigningKeyError),
-    #[error("IO error: {0}")]
-    IOError(std::io::Error),
-    #[error("Invalid name: {0}")]
-    InvalidName(String),
-    #[error("Invalid verifying key: {0}")]
-    InvalidVerifyingKey(ed25519_dalek::SignatureError),
-    #[error("Deciding error: {0}")]
-    DecodeError(DecodeError),
-    #[error("Invalid signing key lenght: {0}")]
-    InvalidSigningKeyLen(usize),
-    #[error("Missing separator")]
-    MissingSeparator,
-}
-
 pub enum ServerCommand {
     Shutdown,
 }
@@ -97,7 +78,7 @@ impl ServerState {
     pub fn initialize_signing_key(&mut self) {}
 
     /// Get the public token that can be given to clients
-    pub fn public_token(&self) -> Result<String, rusty_paseto::prelude::GenericBuilderError> {
+    pub fn public_token(&self) -> anyhow::Result<String> {
         let keypair_bytes = self.paseto_keypair.to_keypair_bytes();
         let private_key = rusty_paseto::core::PasetoAsymmetricPrivateKey::<V4, Public>::from(
             keypair_bytes.as_slice(),
@@ -336,37 +317,37 @@ impl management_service_server::ManagementService for ManagementServiceServer {
 pub fn serialize_nix_store_signing_key(
     path: &std::path::Path,
     key: &CacheKeypair,
-) -> Result<(), Error> {
+) -> anyhow::Result<()> {
     let base64_keypair = BASE64_STANDARD.encode(key.signing_key().to_keypair_bytes());
     let nix_format = format!("{}:{}", key.name, base64_keypair);
-    std::fs::write(path, nix_format).map_err(Error::IOError)
+    std::fs::write(path, nix_format)?;
+    Ok(())
 }
 
 /// Load a serialized nix store signing key from disk.
 /// The file has the format `<name>:encode_base64(<bytes>)`.
-pub fn deserialize_nix_store_signing_key(path: &std::path::Path) -> Result<CacheKeypair, Error> {
-    let input = std::fs::read_to_string(path).map_err(Error::IOError)?;
+pub fn deserialize_nix_store_signing_key(path: &std::path::Path) -> anyhow::Result<CacheKeypair> {
+    let input = std::fs::read_to_string(path)?;
 
-    let (name, bytes64) = input.split_once(':').ok_or(Error::MissingSeparator)?;
+    let Some((name, bytes64)) = input.split_once(':') else {
+        bail!("Cannot split the name from the cache key string");
+    };
 
     if name.is_empty()
         || !name
             .chars()
             .all(|c| char::is_alphanumeric(c) || c == '-' || c == '.')
     {
-        return Err(Error::InvalidName(name.to_string()));
+        bail!("Invalid cache name: {}", name);
     }
 
-    let bytes = BASE64_STANDARD
-        .decode(bytes64.as_bytes())
-        .map_err(Error::DecodeError)?;
+    let bytes = BASE64_STANDARD.decode(bytes64.as_bytes())?;
 
     let signing_key = CacheKeypair::new(
         name,
-        Some(
-            ed25519_dalek::SigningKey::from_keypair_bytes(&bytes.try_into().unwrap())
-                .map_err(Error::InvalidVerifyingKey)?,
-        ),
+        Some(ed25519_dalek::SigningKey::from_keypair_bytes(
+            &bytes.try_into().unwrap(),
+        )?),
     );
 
     Ok(signing_key)

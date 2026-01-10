@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
@@ -17,7 +15,7 @@ enum ClientCommand {
         /// The authentication token
         #[arg(short, long, env = "SNARF_CLIENT_TOKEN", required = true)]
         token: String,
-        store_path: PathBuf,
+        store_path: std::path::PathBuf,
     },
     /// Create a new token on a freshly initialized server
     CreateToken,
@@ -42,7 +40,7 @@ struct ClientCli {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Add some logging for the moment
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // use RUST_LOG or fallback
@@ -52,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     match &client_cli.command {
         ClientCommand::AddClosure { .. } => add_closure(&client_cli).await?,
-        ClientCommand::CreateToken => foo(&client_cli).await?,
+        ClientCommand::CreateToken => create_token(&client_cli).await?,
     }
 
     Ok(())
@@ -109,7 +107,7 @@ async fn add_closure(
                 snix_castore::import::fs::ingest_path::<_, _, _, &[u8]>(
                     blob_service,
                     directory_service,
-                    PathBuf::from(elem.path.to_absolute_path()),
+                    std::path::PathBuf::from(elem.path.to_absolute_path()),
                     None,
                 )
                 .await
@@ -150,7 +148,7 @@ async fn add_closure(
     Ok(())
 }
 
-async fn foo(client_cli: &ClientCli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn create_token(client_cli: &ClientCli) -> anyhow::Result<()> {
     let mut client = management_service_client::ManagementServiceClient::connect(format!(
         "grpc+http://{}",
         client_cli.server_address

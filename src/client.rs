@@ -43,14 +43,11 @@ impl Interceptor for ClientPasetoTokenInterceptor {
 pub async fn clients(
     token: &str,
     url: &Url,
-) -> Result<
-    (
-        Arc<dyn BlobService>,
-        Arc<dyn DirectoryService>,
-        Arc<dyn PathInfoService>,
-    ),
-    Box<dyn std::error::Error + Send + Sync + 'static>,
-> {
+) -> anyhow::Result<(
+    Arc<dyn BlobService>,
+    Arc<dyn DirectoryService>,
+    Arc<dyn PathInfoService>,
+)> {
     Ok(
         (Arc::new(snix_castore::blobservice::GRPCBlobService::from_client(
             "root".into(),
