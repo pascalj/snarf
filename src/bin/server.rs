@@ -6,8 +6,14 @@ use std::{
 use clap::Parser;
 
 use ed25519_dalek::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey};
-use snarf::server::{self, CacheKeypair, ServerCommand};
-use snarf::{database::snarf::connect_database, server::ServerState};
+use snarf::{
+    database::snarf::{connect_database, load_server_state},
+    server::{LazySigningPathInfoService, ServerState},
+};
+use snarf::{
+    keys::{CacheKey, PasetoKey},
+    server::ServerCommand,
+};
 
 use tokio::sync::mpsc;
 
@@ -88,24 +94,16 @@ struct Arguments {
     listen_args: tokio_listener::ListenerAddressLFlag,
 }
 
-fn load_paseto_keypair(path: &Path) -> anyhow::Result<server::PasetoKeypair> {
+fn load_paseto_keypair(path: &Path) -> anyhow::Result<PasetoKey> {
     Ok(ed25519_dalek::SigningKey::read_pkcs8_der_file(path)?)
 }
 
-fn serialize_new_paseto_keypair(path: PathBuf) -> anyhow::Result<server::PasetoKeypair> {
+fn serialize_new_paseto_keypair(path: PathBuf) -> anyhow::Result<PasetoKey> {
     std::fs::create_dir_all(path.parent().unwrap())?;
     use rand_core::OsRng;
     let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
     key.write_pkcs8_der_file(path)?;
     Ok(key)
-}
-
-fn serialize_new_cache_keypair(path: PathBuf) -> anyhow::Result<server::CacheKey> {
-    use rand_core::OsRng;
-    let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    let cache_key = CacheKeypair::new("snarf", Some(key));
-    server::serialize_nix_store_signing_key(&path, &cache_key)?;
-    Ok(cache_key)
 }
 
 #[tokio::main]
@@ -117,21 +115,11 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
     let arguments = Arguments::parse();
 
-    let paseto_key = if arguments.paseto_key_file.exists() {
-        load_paseto_keypair(&arguments.paseto_key_file)
-    } else {
-        serialize_new_paseto_keypair(arguments.paseto_key_file)
-    }?;
-
-    let cache_key = if arguments.cache_keypair_file.exists() {
-        server::deserialize_nix_store_signing_key(&arguments.cache_keypair_file)
-    } else {
-        serialize_new_cache_keypair(arguments.cache_keypair_file)
-    }?;
     let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
-    let new_server_state = Arc::new(std::sync::Mutex::new(ServerState::from_database(
-        db_connection,
-    )));
+    let db_server_state = load_server_state(db_connection)?;
+    let new_server_state = Arc::new(std::sync::Mutex::new(ServerState::try_from(
+        db_server_state,
+    )?));
 
     loop {
         let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
@@ -158,12 +146,12 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
         let (blob_service, directory_service, path_info_service, nar_calculation_service) =
             snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
         // The signing_path_info service will sign only while serving new path_infos.
-        let signing_path_info_service = Arc::new(server::LazySigningPathInfoService::new(
+        let signing_path_info_service = Arc::new(LazySigningPathInfoService::new(
             path_info_service.clone(),
-            cache_key.clone(),
+            new_server_state.lock().unwrap().cache_key(),
         ));
 
-        let server_state = new_server_state.clone().lock()?.clone();
+        let server_state = new_server_state.clone().lock().unwrap().clone();
 
         // The management channels are used to fill the cache and potentially to configure
         // it, authenticated.

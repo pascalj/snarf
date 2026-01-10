@@ -28,62 +28,46 @@ pub struct ServerState {
     paseto_key: PasetoKey,
 
     /// The key that is used for signing the narinfo.
-    _cache_key: CacheKey,
+    cache_key: CacheKey,
 }
 
 pub mod persistence {
-    use super::ServerState;
     use crate::database::snarf::DbServerState;
+    use crate::keys::{CacheKey, PasetoKey};
+
+    use super::ServerState;
+
+    pub fn from_database_state(db_state: DbServerState) -> anyhow::Result<ServerState> {
+        let paseto_key =
+            PasetoKey::from_keypair_bytes(db_state.paseto_key_bytes.as_slice().try_into()?)?;
+        let cache_key = CacheKey::new(
+            &db_state.name,
+            Some(db_state.cache_key_bytes.as_slice().try_into()?),
+        );
+        Ok(ServerState {
+            paseto_key,
+            cache_key,
+        })
+    }
+}
+
+impl TryFrom<crate::database::snarf::DbServerState> for ServerState {
+    type Error = anyhow::Error;
+
+    fn try_from(dto: crate::database::snarf::DbServerState) -> anyhow::Result<Self> {
+        persistence::from_database_state(dto)
+    }
 }
 
 impl ServerState {
-    pub fn new(paseto_keypair: &PasetoKey, cache_keypair: &CacheKey) -> ServerState {
+    pub fn new(paseto_key: PasetoKey, cache_key: CacheKey) -> ServerState {
         Self {
-            paseto_key: paseto_keypair.clone(),
-            _cache_key: cache_keypair.clone(),
+            paseto_key,
+            cache_key,
         }
     }
     /// Renew the signing key
     pub fn initialize_signing_key(&mut self) {}
-
-    pub fn from_database(connection: rusqlite::Connection) -> anyhow::Result<Option<Self>> {
-        let mut stmt = connection.prepare(
-            "SELECT paseto_keypar, cache_keypair, initialized, cache_name FROM server_stateue",
-        )?;
-        let mut person_iter = stmt.query_map([], |row| {
-            let paseto_key_bytes: Vec<u8> = row.get(0)?;
-            let paseto_key = PasetoKey::from_keypair_bytes(
-                paseto_key_bytes
-                    .as_slice()
-                    .try_into()
-                    .expect("Unable to parse the paseto key"),
-            )
-            .unwrap();
-            let cache_key_bytes: Vec<u8> = row.get(1)?;
-            let cache_key = CacheKey::new(
-                "snarf",
-                Some(
-                    ed25519_dalek::SigningKey::from_keypair_bytes(
-                        cache_key_bytes
-                            .as_slice()
-                            .try_into()
-                            .expect("Unable to parse the paseto key"),
-                    )
-                    .unwrap(),
-                ),
-            );
-            Ok(ServerState {
-                paseto_key,
-                _cache_key: cache_key,
-            })
-        })?;
-
-        if let Some(server_state) = person_iter.next() {
-            return Ok(Some(server_state?));
-        }
-
-        Ok(None)
-    }
 
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> anyhow::Result<String> {
@@ -116,6 +100,10 @@ impl ServerState {
 
     pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
         self.paseto_key.clone()
+    }
+
+    pub fn cache_key(&self) -> CacheKey {
+        self.cache_key.clone()
     }
 }
 
