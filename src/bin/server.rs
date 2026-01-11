@@ -1,18 +1,12 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
-use ed25519_dalek::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey};
+use snarf::database::snarf::{DbServerState, store_server_state};
+use snarf::server::ServerCommand;
 use snarf::{
     database::snarf::{connect_database, load_server_state},
     server::{LazySigningPathInfoService, ServerState},
-};
-use snarf::{
-    keys::{CacheKey, PasetoKey},
-    server::ServerCommand,
 };
 
 use tokio::sync::mpsc;
@@ -94,18 +88,6 @@ struct Arguments {
     listen_args: tokio_listener::ListenerAddressLFlag,
 }
 
-fn load_paseto_keypair(path: &Path) -> anyhow::Result<PasetoKey> {
-    Ok(ed25519_dalek::SigningKey::read_pkcs8_der_file(path)?)
-}
-
-fn serialize_new_paseto_keypair(path: PathBuf) -> anyhow::Result<PasetoKey> {
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    use rand_core::OsRng;
-    let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
-    key.write_pkcs8_der_file(path)?;
-    Ok(key)
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Add some logging for the moment
@@ -117,7 +99,14 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
     loop {
         let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
-        let server_state = ServerState::try_from(load_server_state(db_connection)?)?;
+        let server_state = match load_server_state(&db_connection)? {
+            Some(server_state) => ServerState::try_from(server_state)?,
+            None => {
+                let default_state = ServerState::default();
+                store_server_state(&db_connection, &DbServerState::from(default_state.clone()))?;
+                default_state
+            }
+        };
 
         let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
         let do_shutdown = Arc::new(std::sync::Mutex::new(false));

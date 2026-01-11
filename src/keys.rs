@@ -1,5 +1,8 @@
 use ed25519_dalek::SigningKey;
 
+/// A CacheKey is used to sign the NARs this cache hosts.
+///
+/// This will result in a "signature" in the NAR info.
 #[derive(Clone)]
 pub struct CacheKey {
     pub name: String,
@@ -12,12 +15,20 @@ pub type PasetoKey = SigningKey;
 ///
 /// This is not to be confused with the keys to authorize remote actions on the keys, which is done via the PasetoKeypair.
 impl CacheKey {
-    /// Create a new keypair, possibly from an existing ed25519 key. If the key is not given, a new one is generated.
-    pub fn new(name: &str, signing_key: Option<SigningKey>) -> Self {
+    /// Create a new [CacheKey] with a fresh signing key.
+    pub fn new(name: &str) -> Self {
         use rand_core::OsRng;
         Self {
             name: name.into(),
-            signing_key: signing_key.unwrap_or(SigningKey::generate(&mut OsRng)),
+            signing_key: SigningKey::generate(&mut OsRng),
+        }
+    }
+
+    /// Create a [CacheKey] from an existing ed25519 key.
+    pub fn with_signing_key(name: &str, signing_key: SigningKey) -> Self {
+        Self {
+            name: name.into(),
+            signing_key,
         }
     }
 

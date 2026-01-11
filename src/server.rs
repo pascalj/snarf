@@ -1,9 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::bail;
-use futures::StreamExt;
-
-use base64::prelude::*;
 use rusty_paseto::prelude::*;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
@@ -29,6 +25,10 @@ pub struct ServerState {
 
     /// The key that is used for signing the narinfo.
     cache_key: CacheKey,
+
+    /// Whether the server was initialized. An uninitialized server may create tokens
+    /// for unauthorized users to make the setup easier.
+    initialized: bool,
 }
 
 pub mod persistence {
@@ -37,17 +37,33 @@ pub mod persistence {
 
     use super::ServerState;
 
+    /// Try to construct a ServerState from a deserialized [DbServerState]
     pub fn from_database_state(db_state: DbServerState) -> anyhow::Result<ServerState> {
         let paseto_key =
             PasetoKey::from_keypair_bytes(db_state.paseto_key_bytes.as_slice().try_into()?)?;
-        let cache_key = CacheKey::new(
+        let cache_key = CacheKey::with_signing_key(
             &db_state.name,
-            Some(db_state.cache_key_bytes.as_slice().try_into()?),
+            db_state.cache_key_bytes.as_slice().try_into()?,
         );
         Ok(ServerState {
             paseto_key,
             cache_key,
+            initialized: db_state.initialized,
         })
+    }
+
+    /// Construct a [DbServerState] for serialization.
+    pub fn to_database_state(server_state: &ServerState) -> DbServerState {
+        DbServerState {
+            paseto_key_bytes: server_state.paseto_key.to_keypair_bytes().into(),
+            cache_key_bytes: server_state
+                .cache_key
+                .signing_key()
+                .to_keypair_bytes()
+                .into(),
+            initialized: server_state.initialized,
+            name: server_state.cache_key.name.clone(),
+        }
     }
 }
 
@@ -59,16 +75,13 @@ impl TryFrom<crate::database::snarf::DbServerState> for ServerState {
     }
 }
 
-impl ServerState {
-    pub fn new(paseto_key: PasetoKey, cache_key: CacheKey) -> ServerState {
-        Self {
-            paseto_key,
-            cache_key,
-        }
+impl From<ServerState> for crate::database::snarf::DbServerState {
+    fn from(val: ServerState) -> Self {
+        persistence::to_database_state(&val)
     }
-    /// Renew the signing key
-    pub fn initialize_signing_key(&mut self) {}
+}
 
+impl ServerState {
     /// Get the public token that can be given to clients
     pub fn public_token(&self) -> anyhow::Result<String> {
         let keypair_bytes = self.paseto_key.to_keypair_bytes();
@@ -104,6 +117,18 @@ impl ServerState {
 
     pub fn cache_key(&self) -> CacheKey {
         self.cache_key.clone()
+    }
+}
+
+impl Default for ServerState {
+    fn default() -> Self {
+        let cache_key = CacheKey::new("snarf");
+        let paseto_key = PasetoKey::generate(&mut rand_core::OsRng);
+        Self {
+            cache_key,
+            paseto_key,
+            initialized: false,
+        }
     }
 }
 
@@ -259,7 +284,7 @@ pub fn server_routes(
         ),
     )
     .add_service(management_service_server::ManagementServiceServer::new(
-        ManagementServiceServer::new(command_channel, server_state, path_info_service),
+        ManagementServiceServer::new(command_channel, server_state),
     ))
 }
 
@@ -267,19 +292,13 @@ pub fn server_routes(
 pub struct ManagementServiceServer {
     server_state: ServerState,
     _command_channel: mpsc::Sender<ServerCommand>,
-    path_info_service: Arc<dyn PathInfoService>,
 }
 
 impl ManagementServiceServer {
-    fn new(
-        command_channel: &mpsc::Sender<ServerCommand>,
-        server_state: &ServerState,
-        path_info_service: Arc<dyn PathInfoService>,
-    ) -> Self {
+    fn new(command_channel: &mpsc::Sender<ServerCommand>, server_state: &ServerState) -> Self {
         Self {
             server_state: server_state.clone(),
             _command_channel: command_channel.clone(),
-            path_info_service: path_info_service.clone(),
         }
     }
 }
@@ -291,7 +310,7 @@ impl management_service_server::ManagementService for ManagementServiceServer {
         _: tonic::Request<NewClientTokenRequest>,
     ) -> Result<tonic::Response<ClientToken>, tonic::Status> {
         // TODO: check token
-        if self.path_info_service.list().next().await.is_some() {
+        if self.server_state.initialized {
             return Err(tonic::Status::permission_denied(
                 "Server is already initialized",
             ));
@@ -304,47 +323,4 @@ impl management_service_server::ManagementService for ManagementServiceServer {
                 .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
         }))
     }
-}
-
-/// Serialize an ed25519 keypair in the format that Nix uses with `nix-store
-/// --generate-binary-cache-key`. Snix provides the counterpart of this, but
-/// it doesn't expose the key bytes, so we cannot use it to display the public
-/// key nicely.
-pub fn serialize_nix_store_signing_key(
-    path: &std::path::Path,
-    key: &CacheKey,
-) -> anyhow::Result<()> {
-    let base64_keypair = BASE64_STANDARD.encode(key.signing_key().to_keypair_bytes());
-    let nix_format = format!("{}:{}", key.name, base64_keypair);
-    std::fs::write(path, nix_format)?;
-    Ok(())
-}
-
-/// Load a serialized nix store signing key from disk.
-/// The file has the format `<name>:encode_base64(<bytes>)`.
-pub fn deserialize_nix_store_signing_key(path: &std::path::Path) -> anyhow::Result<CacheKey> {
-    let input = std::fs::read_to_string(path)?;
-
-    let Some((name, bytes64)) = input.split_once(':') else {
-        bail!("Cannot split the name from the cache key string");
-    };
-
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| char::is_alphanumeric(c) || c == '-' || c == '.')
-    {
-        bail!("Invalid cache name: {}", name);
-    }
-
-    let bytes = BASE64_STANDARD.decode(bytes64.as_bytes())?;
-
-    let signing_key = CacheKey::new(
-        name,
-        Some(ed25519_dalek::SigningKey::from_keypair_bytes(
-            &bytes.try_into().unwrap(),
-        )?),
-    );
-
-    Ok(signing_key)
 }
