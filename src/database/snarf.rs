@@ -5,6 +5,8 @@ use rusqlite::{Connection, OptionalExtension, Result};
 
 refinery::embed_migrations!("sql");
 
+/// Holds data from the database related to the [ServerState]. The purpose of this
+/// is to act as a small bridge for serialization.
 #[derive(Clone)]
 pub struct DbServerState {
     pub paseto_key_bytes: Vec<u8>,
@@ -13,6 +15,7 @@ pub struct DbServerState {
     pub name: String,
 }
 
+/// Connect to the sqlite database at path.
 pub fn connect_database<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let mut connection = rusqlite::Connection::open(path)?;
     migrations::runner()
@@ -22,6 +25,7 @@ pub fn connect_database<P: AsRef<Path>>(path: P) -> Result<Connection> {
     Ok(connection)
 }
 
+/// Load the server state from the database.
 pub fn load_server_state(connection: &Connection) -> Result<Option<DbServerState>> {
     connection
         .query_row(
@@ -39,6 +43,8 @@ pub fn load_server_state(connection: &Connection) -> Result<Option<DbServerState
         .optional()
 }
 
+/// Store the server state in the database. This will ensure that only one server state
+/// exists. Thus, it can be used to initialize or update the server's state.
 pub fn store_server_state(connection: &Connection, server_state: &DbServerState) -> Result<usize> {
     connection.execute(
         "INSERT OR REPLACE INTO server_state (id, paseto_key, cache_key, cache_name, initialized) VALUES (1, ?1, ?2, ?3, ?4)",
