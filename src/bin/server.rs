@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
             Some(server_state) => ServerState::try_from(server_state)?,
             None => {
                 let default_state = ServerState::default();
-                store_server_state(&db_connection, &DbServerState::from(default_state.clone()))?;
+                store_server_state(&db_connection, &default_state.to_owned().into())?;
                 default_state
             }
         };
