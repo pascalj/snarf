@@ -48,6 +48,11 @@ in
       type = types.nullOr types.str;
       description = "The name of the cache, for example for signing";
     };
+    state_directory = mkOption {
+      default = null;
+      type = types.nullOr types.str;
+      description = "The directory where snarfd keeps its runtime data";
+    };
     extraArgs = mkOption {
       default = [ ];
       type = lib.types.listOf lib.types.str;
@@ -68,6 +73,7 @@ in
             cfg.directory_service != null
           ) " --directory-service-addr ${cfg.directory_service}"
           + lib.optionalString (cfg.path_info_service != null) " --path-info-service-addr ${cfg.path_info}"
+          + lib.optionalString (cfg.state_directory != null) " --state-directory ${cfg.state_directory}"
           + lib.escapeShellArgs cfg.extraArgs;
         DynamicUser = true;
         StateDirectory = "snarf";

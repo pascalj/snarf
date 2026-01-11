@@ -71,13 +71,9 @@ struct Arguments {
     #[clap(long, default_value = "snarf")]
     cache_name: String,
 
-    /// The path to the paseto key file as raw bytes.
-    #[arg(long, env, default_value = "/var/lib/snarf/paseto_keypair.key")]
-    paseto_key_file: PathBuf,
-
-    /// The path to the cache key file as created by `nix-store --generate-binary-cache-key`.
-    #[arg(long, env, default_value = "/var/lib/snarf/cache_keypair.key")]
-    cache_keypair_file: PathBuf,
+    /// The directory where snarf holds it's state (database)
+    #[arg(long, env, default_value = "/var/lib/snarf/")]
+    state_directory: PathBuf,
 
     /// The Snix store service URLs that are used for the underlying store.
     #[clap(flatten)]
@@ -98,7 +94,8 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
     let arguments = Arguments::parse();
 
     loop {
-        let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
+        let db_connection =
+            connect_database(arguments.state_directory.as_path().join("snarf.sqlite"))?;
         let server_state = match load_server_state(&db_connection)? {
             Some(server_state) => ServerState::try_from(server_state)?,
             None => {
