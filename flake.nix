@@ -31,6 +31,7 @@
             "Cargo.toml"
             ".rs"
             ".proto"
+            ".sql"
           ];
 
           # Copy over the proto files from snix. See devenv:
@@ -54,6 +55,7 @@
             outputHashes = {
               "nar-bridge-0.1.0" = "sha256-a/WYaBl5xluFUyvOh/hPgR0bjBcL7GfS0fpFxIV49cc=";
               "wu-manber-0.1.0" = "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
+              "refinery-0.9.0" = "sha256-QJzornAnKWapUm3OpVH83MKyk2zc4RHRkph9EV4LQJ0=";
             };
           };
 
