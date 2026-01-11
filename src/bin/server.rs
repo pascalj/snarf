@@ -115,13 +115,10 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
     let arguments = Arguments::parse();
 
-    let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
-    let db_server_state = load_server_state(db_connection)?;
-    let new_server_state = Arc::new(std::sync::Mutex::new(ServerState::try_from(
-        db_server_state,
-    )?));
-
     loop {
+        let db_connection = connect_database("/var/lib/snarf/snarfd.sqlite")?;
+        let server_state = ServerState::try_from(load_server_state(db_connection)?)?;
+
         let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
         let do_shutdown = Arc::new(std::sync::Mutex::new(false));
 
@@ -145,13 +142,12 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
         let (blob_service, directory_service, path_info_service, nar_calculation_service) =
             snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
+
         // The signing_path_info service will sign only while serving new path_infos.
         let signing_path_info_service = Arc::new(LazySigningPathInfoService::new(
             path_info_service.clone(),
-            new_server_state.lock().unwrap().cache_key(),
+            server_state.cache_key(),
         ));
-
-        let server_state = new_server_state.clone().lock().unwrap().clone();
 
         // The management channels are used to fill the cache and potentially to configure
         // it, authenticated.
