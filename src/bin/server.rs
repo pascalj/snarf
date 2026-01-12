@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
-use snarf::database::snarf::{DbServerState, store_server_state};
+use snarf::database::snarf::store_server_state;
 use snarf::server::ServerCommand;
 use snarf::{
     database::snarf::{connect_database, load_server_state},
@@ -109,6 +109,7 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
         let do_shutdown = Arc::new(std::sync::Mutex::new(false));
 
         let do_shutdown_copy = do_shutdown.clone();
+        let mut server_state_clone = server_state.clone();
         let shutdown = async move {
             info!("Press Cltr-C for graceful shutdown.");
             tokio::select! {
@@ -117,6 +118,11 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
                 }
                 action = command_receiver.recv() => {
                     match action {
+                        Some(ServerCommand::MarkInitialized) => {
+                            server_state_clone.initialize();
+                            store_server_state(&db_connection, &server_state_clone.into()).expect("Updating the server state");
+                            *do_shutdown_copy.lock().unwrap() = false;
+                        },
                         Some(ServerCommand::Shutdown) => {
                             *do_shutdown_copy.lock().unwrap() = false;
                         },

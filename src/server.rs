@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 
@@ -12,6 +11,7 @@ use crate::keys::{CacheKey, PasetoKey};
 tonic::include_proto!("snarf.v1");
 
 pub enum ServerCommand {
+    MarkInitialized,
     Shutdown,
 }
 
@@ -87,6 +87,10 @@ impl ServerState {
 
     pub fn cache_key(&self) -> CacheKey {
         self.cache_key.clone()
+    }
+
+    pub fn initialize(&mut self) {
+        self.initialized = true;
     }
 }
 
@@ -232,16 +236,17 @@ pub fn server_routes(
     path_info_service: Arc<dyn PathInfoService>,
     nar_calculation_service: Box<dyn NarCalculationService>,
 ) -> tonic::service::Routes {
+    let authenticator = PasetoAuthInterceptor::from(&server_state.paseto_key);
     tonic::service::Routes::new(
         snix_castore::proto::blob_service_server::BlobServiceServer::with_interceptor(
             snix_castore::proto::GRPCBlobServiceWrapper::new(blob_service),
-            PasetoAuthInterceptor::from(server_state),
+            authenticator.clone(),
         ),
     )
     .add_service(
         snix_castore::proto::directory_service_server::DirectoryServiceServer::with_interceptor(
             snix_castore::proto::GRPCDirectoryServiceWrapper::new(directory_service),
-            PasetoAuthInterceptor::from(server_state),
+            authenticator.clone(),
         ),
     )
     .add_service(
@@ -250,25 +255,35 @@ pub fn server_routes(
                 path_info_service.clone(),
                 nar_calculation_service,
             ),
-            PasetoAuthInterceptor::from(server_state),
+            authenticator.clone(),
         ),
     )
     .add_service(management_service_server::ManagementServiceServer::new(
-        ManagementServiceServer::new(command_channel, server_state),
+        ManagementServiceServer::new(
+            command_channel,
+            &server_state.paseto_key,
+            server_state.initialized,
+        ),
     ))
 }
 
 #[derive(Clone)]
 pub struct ManagementServiceServer {
-    server_state: ServerState,
-    _command_channel: mpsc::Sender<ServerCommand>,
+    initialized: bool,
+    paseto_key: PasetoKey,
+    command_channel: mpsc::Sender<ServerCommand>,
 }
 
 impl ManagementServiceServer {
-    fn new(command_channel: &mpsc::Sender<ServerCommand>, server_state: &ServerState) -> Self {
+    fn new(
+        command_channel: &mpsc::Sender<ServerCommand>,
+        paseto_key: &PasetoKey,
+        initialized: bool,
+    ) -> Self {
         Self {
-            server_state: server_state.clone(),
-            _command_channel: command_channel.clone(),
+            initialized,
+            paseto_key: paseto_key.clone(),
+            command_channel: command_channel.clone(),
         }
     }
 }
@@ -278,17 +293,22 @@ impl management_service_server::ManagementService for ManagementServiceServer {
     async fn create_client_token(
         &self,
         _: tonic::Request<NewClientTokenRequest>,
-    ) -> Result<tonic::Response<ClientToken>, tonic::Status> {
+    ) -> anyhow::Result<tonic::Response<ClientToken>, tonic::Status> {
         // TODO: check token
-        if self.server_state.initialized {
+        if self.initialized {
             return Err(tonic::Status::permission_denied(
                 "Server is already initialized",
             ));
         }
 
+        self.command_channel
+            .send(ServerCommand::MarkInitialized)
+            .await
+            .map_err(|_| tonic::Status::internal("Unable to mark initialized"))?;
+
         Ok(tonic::Response::new(ClientToken {
             token: self
-                .server_state
+                .paseto_key
                 .public_token()
                 .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
         }))
