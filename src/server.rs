@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use rusty_paseto::prelude::*;
 
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
@@ -82,37 +81,8 @@ impl From<ServerState> for crate::database::snarf::DbServerState {
 }
 
 impl ServerState {
-    /// Get the public token that can be given to clients
-    pub fn public_token(&self) -> anyhow::Result<String> {
-        let keypair_bytes = self.paseto_key.to_keypair_bytes();
-        let private_key = rusty_paseto::core::PasetoAsymmetricPrivateKey::<V4, Public>::from(
-            keypair_bytes.as_slice(),
-        );
-
-        let token = rusty_paseto::prelude::GenericBuilder::<V4, Public>::default()
-            .set_claim(SubjectClaim::from("manage cache"))
-            .try_sign(&private_key)?;
-
-        Ok(token)
-    }
-
-    /// Verify a client token for this PasetoState (signing_key). Currently, this
-    /// just checks whether it is a valid token, no claims are checked at all.
-    pub fn verify_token(&self, token: &str) -> bool {
-        let public_key =
-            rusty_paseto::core::Key::<32>::from(self.paseto_key.verifying_key().as_bytes());
-        let paseto_public_key = PasetoAsymmetricPublicKey::<V4, Public>::from(&public_key);
-        rusty_paseto::prelude::GenericParser::<V4, Public>::default()
-            .parse(token, &paseto_public_key)
-            .is_ok()
-    }
-
     pub fn key_bytes(&self) -> [u8; 64] {
         self.paseto_key.to_keypair_bytes()
-    }
-
-    pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
-        self.paseto_key.clone()
     }
 
     pub fn cache_key(&self) -> CacheKey {
@@ -123,7 +93,7 @@ impl ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         let cache_key = CacheKey::new("snarf");
-        let paseto_key = PasetoKey::generate(&mut rand_core::OsRng);
+        let paseto_key = PasetoKey::default();
         Self {
             cache_key,
             paseto_key,
@@ -138,7 +108,7 @@ impl Default for ServerState {
 /// perform a certain action.
 struct PasetoAuthInterceptor {
     /// The server state to use for authentication.
-    state: ServerState,
+    paseto_key: PasetoKey,
 }
 
 impl Interceptor for PasetoAuthInterceptor {
@@ -162,7 +132,7 @@ impl Interceptor for PasetoAuthInterceptor {
             .ok_or_else(|| tonic::Status::unauthenticated("invalid authentication scheme"))?;
 
         // TODO: split this off into capabilities
-        if !self.state.verify_token(token) {
+        if !self.paseto_key.verify_token(token) {
             return Err(tonic::Status::unauthenticated(
                 "invalid authentication scheme",
             ));
@@ -172,10 +142,10 @@ impl Interceptor for PasetoAuthInterceptor {
     }
 }
 
-impl From<&ServerState> for PasetoAuthInterceptor {
-    fn from(state: &ServerState) -> Self {
+impl From<&PasetoKey> for PasetoAuthInterceptor {
+    fn from(paseto_key: &PasetoKey) -> Self {
         Self {
-            state: state.clone(),
+            paseto_key: paseto_key.clone(),
         }
     }
 }
