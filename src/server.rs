@@ -43,7 +43,7 @@ pub mod persistence {
         let cache_key = CacheKey::with_signing_key(
             &db_state.name,
             db_state.cache_key_bytes.as_slice().try_into()?,
-        );
+        )?;
         Ok(ServerState {
             paseto_key,
             cache_key,

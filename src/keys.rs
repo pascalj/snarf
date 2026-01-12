@@ -69,11 +69,11 @@ impl CacheKey {
     }
 
     /// Create a [CacheKey] from an existing ed25519 key.
-    pub fn with_signing_key(name: &str, signing_key: SigningKey) -> Self {
-        Self {
+    pub fn with_signing_key(name: &str, keypair_bytes: &[u8; 64]) -> anyhow::Result<Self> {
+        Ok(Self {
             name: name.into(),
-            signing_key,
-        }
+            signing_key: ed25519_dalek::SigningKey::from_keypair_bytes(keypair_bytes)?,
+        })
     }
 
     /// Return the key for signing NARs in the store.
