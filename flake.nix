@@ -119,6 +119,7 @@
                 ];
                 environment.systemPackages = [
                   self.packages.${pkgs.system}.default
+                  pkgs.sqlite
                 ];
               };
           };
@@ -126,7 +127,9 @@
             snarfd.wait_for_unit("snarf.service")
 
             snarf.wait_for_unit("default.target")
-            snarf.succeed("snarf -s snarfd:9000 create-token")
+
+            snarf.succeed('export SNARF_CLIENT_TOKEN=$(snarf -s snarfd:9000 create-token); \
+            snarf -s snarfd:9000 add-closure --token $SNARF_CLIENT_TOKEN $(realpath $(which snarf))')
           '';
         };
       });
