@@ -160,7 +160,7 @@ async fn create_token(client_cli: &ClientCli) -> anyhow::Result<()> {
     });
     let response = client.create_client_token(request).await?;
 
-    info!("Token: {}", response.into_inner().token);
+    println!("{}", response.into_inner().token);
 
     Ok(())
 }
