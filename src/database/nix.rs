@@ -137,8 +137,8 @@ ORDER BY id; "
             let path = nix_compat::store_path::StorePath::from_absolute_path_full(&path_string)
                 .map(|x| x.0)
                 .expect("Could not create StorePath from the databasse");
-            let deriver_string: String = row.get(4)?;
-            let signatures_string: String = row.get(7)?;
+            let deriver_string: Option<String> = row.get(4)?;
+            let signatures_string: Option<String> = row.get(7)?;
             let nar_sha256 =
                 NixHash::from_str(row.get_ref_unwrap(2).as_str()?, Some(HashAlgo::Sha256))
                     .expect("Unable to construct a nar hash from the database")
@@ -146,15 +146,19 @@ ORDER BY id; "
                     .try_into()
                     .expect("Unable to convert a hash into 32 bytes of data");
 
-            let deriver = (!deriver_string.is_empty()).then(|| {
+            let deriver = deriver_string.map(|deriver_string| {
                 nix_compat::store_path::StorePath::from_absolute_path_full(&deriver_string)
                     .expect("Could not create path from database entry")
                     .0
             });
             let signatures = signatures_string
-                .split_terminator(";")
-                .map(|s| Signature::parse(s).expect("Unable to parse signature"))
-                .collect();
+                .map(|signature_string| {
+                    signature_string
+                        .split_terminator(";")
+                        .map(|s| Signature::parse(s).expect("Unable to parse signature"))
+                        .collect()
+                })
+                .unwrap_or_default();
 
             Ok(LocalPathInfo {
                 valid_path_id: row.get(0)?,
