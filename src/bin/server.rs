@@ -94,108 +94,121 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
     let arguments = Arguments::parse();
 
     loop {
-        let db_connection =
-            connect_database(arguments.state_directory.as_path().join("snarf.sqlite"))?;
-        let server_state = match load_server_state(&db_connection)? {
-            Some(server_state) => ServerState::try_from(server_state)?,
-            None => {
-                let default_state = ServerState::default();
-                store_server_state(&db_connection, &default_state.to_owned().into())?;
-                default_state
-            }
-        };
-
-        let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
-        let do_shutdown = Arc::new(std::sync::Mutex::new(false));
-
-        let do_shutdown_copy = do_shutdown.clone();
-        let mut server_state_clone = server_state.clone();
-        let shutdown = async move {
-            info!("Press Cltr-C for graceful shutdown.");
-            tokio::select! {
-                _= tokio::signal::ctrl_c() => {
-                    *do_shutdown_copy.lock().unwrap() = true;
-                }
-                action = command_receiver.recv() => {
-                    match action {
-                        Some(ServerCommand::MarkInitialized) => {
-                            server_state_clone.initialize();
-                            store_server_state(&db_connection, &server_state_clone.into()).expect("Updating the server state");
-                            *do_shutdown_copy.lock().unwrap() = false;
-                        },
-                        Some(ServerCommand::Shutdown) => {
-                            *do_shutdown_copy.lock().unwrap() = false;
-                        },
-                        None => {}
-                    }
-                }
-            }
-        };
-
-        let (blob_service, directory_service, path_info_service, nar_calculation_service) =
-            snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
-
-        // The signing_path_info service will sign only while serving new path_infos.
-        let signing_path_info_service = Arc::new(LazySigningPathInfoService::new(
-            path_info_service.clone(),
-            server_state.cache_key(),
-        ));
-
-        // The management channels are used to fill the cache and potentially to configure
-        // it, authenticated.
-        let management_routes = snarf::server::server_routes(
-            &command_sender,
-            &server_state,
-            blob_service.clone(),
-            directory_service.clone(),
-            signing_path_info_service.clone(),
-            nar_calculation_service,
-        );
-
-        // The nar-bridge serves the actual cache data, unauthenticated.
-        let nar_bridge_state = nar_bridge::AppState::new(
-            blob_service.clone(),
-            directory_service.clone(),
-            signing_path_info_service,
-            std::num::NonZero::new(64usize).unwrap(),
-        );
-
-        // HTTP
-        let app = nar_bridge::gen_router(30)
-            .with_state(nar_bridge_state)
-            .merge(management_routes.into_axum_router());
-
-        let listen_address = &arguments
-            .listen_args
-            .listen_address
-            .clone()
-            .unwrap_or_else(|| {
-                "[::]:9000"
-                    .parse()
-                    .expect("invalid fallback listen address")
-            });
-
-        let listener = tokio_listener::Listener::bind(
-            listen_address,
-            &Default::default(),
-            &arguments.listen_args.listener_options,
-        )
-        .await;
-
-        info!(listen_address=%listen_address, "starting daemon");
-
-        let serve = tokio_listener::axum07::serve(
-            listener.unwrap(),
-            app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
-        )
-        .with_graceful_shutdown(shutdown);
-
-        serve.await?;
-
-        if *do_shutdown.lock().unwrap() {
+        if let ServerTransition::Shutdown = start_server(&arguments).await? {
             break;
-        }
+        };
     }
 
     Ok(())
+}
+
+/// The new state of the main loop.
+enum ServerTransition {
+    Shutdown,
+    Restart,
+}
+
+async fn start_server(
+    arguments: &Arguments,
+) -> anyhow::Result<ServerTransition, Box<dyn std::error::Error + Send + Sync>> {
+    let db_connection = connect_database(arguments.state_directory.as_path().join("snarf.sqlite"))?;
+    let server_state = match load_server_state(&db_connection)? {
+        Some(server_state) => ServerState::try_from(server_state)?,
+        None => {
+            let default_state = ServerState::default();
+            store_server_state(&db_connection, &default_state.to_owned().into())?;
+            default_state
+        }
+    };
+
+    let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
+    let do_shutdown = Arc::new(std::sync::Mutex::new(false));
+
+    let do_shutdown_copy = do_shutdown.clone();
+    let mut server_state_clone = server_state.clone();
+    let shutdown = async move {
+        info!("Press Cltr-C for graceful shutdown.");
+        tokio::select! {
+            _= tokio::signal::ctrl_c() => {
+                *do_shutdown_copy.lock().unwrap() = true;
+            }
+            action = command_receiver.recv() => {
+                match action {
+                    Some(ServerCommand::MarkInitialized) => {
+                        server_state_clone.initialize();
+                        store_server_state(&db_connection, &server_state_clone.into()).expect("Updating the server state");
+                        *do_shutdown_copy.lock().unwrap() = false;
+                    },
+                    Some(ServerCommand::Shutdown) => {
+                        *do_shutdown_copy.lock().unwrap() = false;
+                    },
+                    None => {}
+                }
+            }
+        }
+    };
+
+    let (blob_service, directory_service, path_info_service, nar_calculation_service) =
+        snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
+
+    // The signing_path_info service will sign only while serving new path_infos.
+    let signing_path_info_service = Arc::new(LazySigningPathInfoService::new(
+        path_info_service.clone(),
+        server_state.cache_key(),
+    ));
+
+    // The management channels are used to fill the cache and potentially to configure
+    // it, authenticated.
+    let management_routes = snarf::server::server_routes(
+        &command_sender,
+        &server_state,
+        blob_service.clone(),
+        directory_service.clone(),
+        signing_path_info_service.clone(),
+        nar_calculation_service,
+    );
+
+    // The nar-bridge serves the actual cache data, unauthenticated.
+    let nar_bridge_state = nar_bridge::AppState::new(
+        blob_service.clone(),
+        directory_service.clone(),
+        signing_path_info_service,
+        std::num::NonZero::new(64usize).unwrap(),
+    );
+
+    // HTTP
+    let app = nar_bridge::gen_router(30)
+        .with_state(nar_bridge_state)
+        .merge(management_routes.into_axum_router());
+
+    let listen_address = &arguments
+        .listen_args
+        .listen_address
+        .clone()
+        .unwrap_or_else(|| {
+            "[::]:9000"
+                .parse()
+                .expect("invalid fallback listen address")
+        });
+
+    let listener = tokio_listener::Listener::bind(
+        listen_address,
+        &Default::default(),
+        &arguments.listen_args.listener_options,
+    )
+    .await;
+
+    info!(listen_address=%listen_address, "starting daemon");
+
+    tokio_listener::axum07::serve(
+        listener.unwrap(),
+        app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
+
+    if *do_shutdown.lock().unwrap() {
+        return Ok(ServerTransition::Shutdown);
+    }
+    Ok(ServerTransition::Restart)
 }
