@@ -74,9 +74,9 @@ impl TryFrom<crate::database::snarf::DbServerState> for ServerState {
     }
 }
 
-impl From<ServerState> for crate::database::snarf::DbServerState {
-    fn from(val: ServerState) -> Self {
-        persistence::to_database_state(&val)
+impl From<&ServerState> for crate::database::snarf::DbServerState {
+    fn from(val: &ServerState) -> Self {
+        persistence::to_database_state(val)
     }
 }
 

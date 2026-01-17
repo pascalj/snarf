@@ -77,7 +77,7 @@ mod tests {
         let connection = open_database();
         let default_state = ServerState::default();
         assert_eq!(
-            store_server_state(&connection, &DbServerState::from(default_state.clone())).unwrap(),
+            store_server_state(&connection, &DbServerState::from(&default_state)).unwrap(),
             1
         )
     }
@@ -86,7 +86,7 @@ mod tests {
     fn loading_state() {
         let connection = open_database();
         let default_state = ServerState::default();
-        store_server_state(&connection, &DbServerState::from(default_state.clone()))
+        store_server_state(&connection, &DbServerState::from(&default_state))
             .expect("Failed to store data");
 
         let server_state = load_server_state(&connection).expect("Unable to load state");
@@ -99,8 +99,8 @@ mod tests {
     fn storing_over_existing_state() {
         let connection = open_database();
         let default_state = ServerState::default();
-        store_server_state(&connection, &DbServerState::from(default_state.clone())).unwrap();
-        store_server_state(&connection, &DbServerState::from(default_state.clone())).unwrap();
+        store_server_state(&connection, &DbServerState::from(&default_state)).unwrap();
+        store_server_state(&connection, &DbServerState::from(&default_state)).unwrap();
 
         assert_eq!(
             connection

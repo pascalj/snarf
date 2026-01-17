@@ -108,6 +108,17 @@ enum ServerTransition {
     Restart,
 }
 
+/// The signal to shutdown the server.
+///
+/// This is supposed to be send to axum to perform a graceful shutdown on request.
+enum ShutdownCommand {
+    Shutdown,
+}
+
+/// Start the actual server handling incoming client connections.
+///
+/// This also sets up the communication between internal signal handlers,
+/// for example for restarting or shutdding down the server
 async fn start_server(
     arguments: &Arguments,
 ) -> anyhow::Result<ServerTransition, Box<dyn std::error::Error + Send + Sync>> {
@@ -116,37 +127,13 @@ async fn start_server(
         Some(server_state) => ServerState::try_from(server_state)?,
         None => {
             let default_state = ServerState::default();
-            store_server_state(&db_connection, &default_state.to_owned().into())?;
+            store_server_state(&db_connection, &(&default_state).into())?;
             default_state
         }
     };
 
-    let (command_sender, mut command_receiver) = mpsc::channel::<ServerCommand>(8);
-    let do_shutdown = Arc::new(std::sync::Mutex::new(false));
-
-    let do_shutdown_copy = do_shutdown.clone();
-    let mut server_state_clone = server_state.clone();
-    let shutdown = async move {
-        info!("Press Cltr-C for graceful shutdown.");
-        tokio::select! {
-            _= tokio::signal::ctrl_c() => {
-                *do_shutdown_copy.lock().unwrap() = true;
-            }
-            action = command_receiver.recv() => {
-                match action {
-                    Some(ServerCommand::MarkInitialized) => {
-                        server_state_clone.initialize();
-                        store_server_state(&db_connection, &server_state_clone.into()).expect("Updating the server state");
-                        *do_shutdown_copy.lock().unwrap() = false;
-                    },
-                    Some(ServerCommand::Shutdown) => {
-                        *do_shutdown_copy.lock().unwrap() = false;
-                    },
-                    None => {}
-                }
-            }
-        }
-    };
+    let (command_sender, command_receiver) = mpsc::channel::<ServerCommand>(8);
+    let (shutdown_sender, mut shutdown_receiver) = mpsc::channel::<ShutdownCommand>(1);
 
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
@@ -199,16 +186,63 @@ async fn start_server(
     .await;
 
     info!(listen_address=%listen_address, "starting daemon");
-
-    tokio_listener::axum07::serve(
+    let shutdown = async move {
+        info!("Press Cltr-C for graceful shutdown.");
+        shutdown_receiver.recv().await;
+    };
+    // _= tokio::signal::ctrl_c() => { }
+    let services = tokio_listener::axum07::serve(
         listener.unwrap(),
         app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
     )
-    .with_graceful_shutdown(shutdown)
-    .await?;
+    .with_graceful_shutdown(shutdown);
 
-    if *do_shutdown.lock().unwrap() {
-        return Ok(ServerTransition::Shutdown);
+    services.await?;
+
+    Ok(handle_server_commands(
+        &db_connection,
+        &server_state,
+        command_receiver,
+        shutdown_sender,
+    )
+    .await)
+}
+
+/// Handle internal server commands.
+///
+/// This can update the server state and then pass the shutdown/restart commands
+/// on to axum, so that it reloads the services with the new state.
+async fn handle_server_commands(
+    db_connection: &rusqlite::Connection,
+    server_state: &ServerState,
+    mut command_receiver: mpsc::Receiver<ServerCommand>,
+    shutdown_sender: mpsc::Sender<ShutdownCommand>,
+) -> ServerTransition {
+    tokio::select! {
+        command = command_receiver.recv() => {
+            match command {
+                Some(ServerCommand::MarkInitialized) => {
+                     let mut new_state = server_state.clone();
+                     new_state.initialize();
+                     let db_server_state = snarf::database::snarf::DbServerState::from(&new_state);
+                    store_server_state(db_connection, &db_server_state)
+                                .expect("Updating the server state");
+                    shutdown_sender
+                                .send(ShutdownCommand::Shutdown)
+                                .await
+                                .expect("Sending the shutdown signal");
+                            ServerTransition::Restart
+                },
+                Some(ServerCommand::Shutdown) => {
+                    shutdown_sender
+                            .send(ShutdownCommand::Shutdown)
+                                .await
+                                .expect("Sending the shutdown signal");
+                            ServerTransition::Shutdown
+                }
+                None => ServerTransition::Restart,
+            }
+        }
+        _ = tokio::signal::ctrl_c() => ServerTransition::Shutdown
     }
-    Ok(ServerTransition::Restart)
 }
