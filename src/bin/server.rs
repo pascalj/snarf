@@ -2,7 +2,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
-use snarf::database::snarf::store_server_state;
+use snarf::cache::NARCache;
+use snarf::database::snarf::{load_nar_caches, store_server_state};
 use snarf::server::ServerCommand;
 use snarf::{
     database::snarf::{connect_database, load_server_state},
@@ -131,6 +132,10 @@ async fn start_server(
             default_state
         }
     };
+    let upstream_caches = load_nar_caches(&db_connection)?
+        .iter()
+        .map(NARCache::try_from)
+        .collect::<anyhow::Result<_>>()?;
 
     let (command_sender, command_receiver) = mpsc::channel::<ServerCommand>(8);
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel::<ShutdownCommand>(1);
@@ -147,12 +152,21 @@ async fn start_server(
     // The management channels are used to fill the cache and potentially to configure
     // it, authenticated.
     let management_routes = snarf::server::server_routes(
-        &command_sender,
         &server_state,
         blob_service.clone(),
         directory_service.clone(),
         signing_path_info_service.clone(),
         nar_calculation_service,
+    )
+    .add_service(
+        snarf::server::management_service_server::ManagementServiceServer::new(
+            snarf::server::ManagementServiceWrapper::new(
+                &command_sender,
+                &server_state.paseto_key(),
+                upstream_caches,
+                server_state.is_initialized(),
+            ),
+        ),
     );
 
     // The nar-bridge serves the actual cache data, unauthenticated.

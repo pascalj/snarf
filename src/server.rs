@@ -6,7 +6,10 @@ use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
 use tokio::sync::mpsc;
 use tonic::{async_trait, service::Interceptor};
 
-use crate::keys::{CacheKey, PasetoKey};
+use crate::{
+    cache::NARCache,
+    keys::{CacheKey, PasetoKey},
+};
 
 tonic::include_proto!("snarf.v1");
 
@@ -85,12 +88,20 @@ impl ServerState {
         self.paseto_key.to_keypair_bytes()
     }
 
+    pub fn paseto_key(&self) -> PasetoKey {
+        self.paseto_key.clone()
+    }
+
     pub fn cache_key(&self) -> CacheKey {
         self.cache_key.clone()
     }
 
     pub fn initialize(&mut self) {
         self.initialized = true;
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 }
 
@@ -229,7 +240,6 @@ where
 /// Get the routes used for the server. These will route the usual services but additionally
 /// provide a check for authentication.
 pub fn server_routes(
-    command_channel: &mpsc::Sender<ServerCommand>,
     server_state: &ServerState,
     blob_service: Arc<dyn BlobService>,
     directory_service: Arc<dyn DirectoryService>,
@@ -258,38 +268,33 @@ pub fn server_routes(
             authenticator.clone(),
         ),
     )
-    .add_service(management_service_server::ManagementServiceServer::new(
-        ManagementServiceServer::new(
-            command_channel,
-            &server_state.paseto_key,
-            server_state.initialized,
-        ),
-    ))
 }
 
-#[derive(Clone)]
-pub struct ManagementServiceServer {
+pub struct ManagementServiceWrapper {
     initialized: bool,
     paseto_key: PasetoKey,
+    upstream_caches: Vec<NARCache>,
     command_channel: mpsc::Sender<ServerCommand>,
 }
 
-impl ManagementServiceServer {
-    fn new(
+impl ManagementServiceWrapper {
+    pub fn new(
         command_channel: &mpsc::Sender<ServerCommand>,
         paseto_key: &PasetoKey,
+        upstream_caches: Vec<NARCache>,
         initialized: bool,
     ) -> Self {
         Self {
             initialized,
             paseto_key: paseto_key.clone(),
+            upstream_caches,
             command_channel: command_channel.clone(),
         }
     }
 }
 
 #[tonic::async_trait]
-impl management_service_server::ManagementService for ManagementServiceServer {
+impl management_service_server::ManagementService for ManagementServiceWrapper {
     async fn create_client_token(
         &self,
         _: tonic::Request<NewClientTokenRequest>,

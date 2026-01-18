@@ -48,9 +48,9 @@ pub mod persistence {
     use super::NARCache;
 
     /// Try to construct a ServerState from a deserialized [DbServerState]
-    pub fn from_database(db_nar_cache: DbNARCache) -> anyhow::Result<NARCache> {
+    pub fn from_database(db_nar_cache: &DbNARCache) -> anyhow::Result<NARCache> {
         Ok(NARCache {
-            base_url: db_nar_cache.base_url,
+            base_url: db_nar_cache.base_url.clone(),
         })
     }
 
@@ -62,10 +62,10 @@ pub mod persistence {
     }
 }
 
-impl TryFrom<DbNARCache> for NARCache {
+impl TryFrom<&DbNARCache> for NARCache {
     type Error = anyhow::Error;
 
-    fn try_from(dto: DbNARCache) -> anyhow::Result<Self> {
+    fn try_from(dto: &DbNARCache) -> anyhow::Result<Self> {
         persistence::from_database(dto)
     }
 }
