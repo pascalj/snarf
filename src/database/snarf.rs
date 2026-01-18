@@ -15,6 +15,12 @@ pub struct DbServerState {
     pub name: String,
 }
 
+/// Holds data from the database related to the [NARCache].
+#[derive(Clone)]
+pub struct DbNARCache {
+    pub base_url: String,
+}
+
 /// Connect to the sqlite database at path.
 pub fn connect_database<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let mut connection = rusqlite::Connection::open(path)?;
@@ -55,6 +61,29 @@ pub fn store_server_state(connection: &Connection, server_state: &DbServerState)
             &server_state.initialized,
         ),
     )
+}
+
+/// Load all nar_caches from the database.
+pub fn load_nar_caches(connection: &Connection) -> Result<Vec<DbNARCache>> {
+    let mut stmt = connection.prepare("SELECT base_url FROM nar_caches")?;
+    stmt.query_map([], |row| {
+        Ok(DbNARCache {
+            base_url: row.get(0)?,
+        })
+    })?
+    .collect()
+}
+
+/// Insert a new cache into the database.
+pub fn insert_nar_cache(connection: &Connection, db_nar_cache: &DbNARCache) -> Result<usize> {
+    connection.execute(
+        "INSERT OR REPLACE INTO nar_caches (base_url) VALUES (?1)",
+        [&db_nar_cache.base_url],
+    )
+}
+
+pub fn remove_nar_cache(connection: &Connection, base_url: &str) -> Result<usize> {
+    connection.execute("DELETE FROM nar_caches WHERE base_url == ?1", [base_url])
 }
 
 #[cfg(test)]
@@ -111,5 +140,47 @@ mod tests {
                 .expect("Failed to find number of server states"),
             1
         );
+    }
+
+    #[test]
+    fn loading_nar_caches() {
+        let connection = open_database();
+        connection
+            .execute(
+                "INSERT INTO nar_caches (base_url) VALUES (\"https://my.cache.example.com\"), (\"https://other.cache.example.com\")",
+                [],
+            )
+            .expect("Failed to insert");
+        let caches = load_nar_caches(&connection).expect("Loading caches failed");
+        assert_eq!(caches.len(), 2);
+        assert_eq!(
+            caches.first().unwrap().base_url,
+            "https://my.cache.example.com"
+        );
+        assert_eq!(
+            caches.get(1).unwrap().base_url,
+            "https://other.cache.example.com"
+        );
+    }
+
+    #[test]
+    fn inserting_and_removing_caches() {
+        let connection = open_database();
+        let cache = DbNARCache {
+            base_url: "foo".into(),
+        };
+        let insert_count = insert_nar_cache(&connection, &cache).expect("Inserting cache failed");
+        let caches = load_nar_caches(&connection)
+            .expect("Loading cache failed")
+            .len();
+        let deleted = remove_nar_cache(&connection, &cache.base_url).expect("Deleting failed");
+        let is_empty = load_nar_caches(&connection)
+            .expect("Loading cache failed")
+            .is_empty();
+
+        assert_eq!(insert_count, 1);
+        assert_eq!(caches, 1);
+        assert_eq!(deleted, 1);
+        assert!(is_empty)
     }
 }
