@@ -1,12 +1,11 @@
 use reqwest::Client;
 
-use futures::future::join_all;
-
 use crate::database::snarf::DbNARCache;
 
 /// Represents an upstream NAR cache.
 ///
 /// It can be queried to avoid duplicate storage.
+#[derive(Clone)]
 pub struct NARCache {
     base_url: String,
 }
@@ -19,26 +18,14 @@ impl NARCache {
     }
 
     /// Test a list of hashes against this cache. Returns the hashes that are not in this cache.
-    ///
-    /// TODO: make this Vec<&[u8;32]>
-    pub async fn select_missing_hashes(&self, client: &Client, hashes: &[String]) -> Vec<String> {
-        let requests = hashes.iter().map(|hash| {
-            let url = format!("{}/{}.narinfo", self.base_url, hash);
-            let client = client.clone();
-            let hash = hash.clone();
+    pub async fn has_nar_hash(&self, client: &Client, nar_hash: &[u8]) -> anyhow::Result<bool> {
+        let url = format!(
+            "{}/{}.narinfo",
+            self.base_url,
+            nix_compat::nixbase32::encode(nar_hash)
+        );
 
-            async move {
-                client
-                    .head(&url)
-                    .send()
-                    .await
-                    .ok()
-                    .filter(|resp| resp.status().is_success())
-                    .map(|_| hash)
-            }
-        });
-
-        join_all(requests).await.into_iter().flatten().collect()
+        Ok(client.head(&url).send().await?.status().is_success())
     }
 }
 

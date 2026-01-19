@@ -39,6 +39,7 @@ rusqlite = { version = "0.38.0", features = [ "fallible_uint" ] }
 anyhow = "1.0.100"
 refinery = { git = "https://github.com/rust-db/refinery.git", rev = "refs/pull/410/head", features = ["rusqlite"]}
 reqwest = "0.13.1"
+tokio-stream = "0.1.18"
 
 [build-dependencies]
 tonic-build = "0.12.3"

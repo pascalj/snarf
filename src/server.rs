@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use snix_castore::{blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{nar::NarCalculationService, pathinfoservice::PathInfoService};
+use tokio_stream::wrappers::ReceiverStream;
 
 use tokio::sync::mpsc;
 use tonic::{async_trait, service::Interceptor};
@@ -295,6 +297,9 @@ impl ManagementServiceWrapper {
 
 #[tonic::async_trait]
 impl management_service_server::ManagementService for ManagementServiceWrapper {
+    type FilterHashesStream = std::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<NarHashResponse, tonic::Status>> + Send>,
+    >;
     async fn create_client_token(
         &self,
         _: tonic::Request<NewClientTokenRequest>,
@@ -317,5 +322,49 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
                 .public_token()
                 .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
         }))
+    }
+
+    /// Filter hashes whether they need uploading.
+    async fn filter_hashes(
+        &self,
+        request: tonic::Request<tonic::Streaming<NarHashRequest>>,
+    ) -> std::result::Result<tonic::Response<Self::FilterHashesStream>, tonic::Status> {
+        let mut in_stream = request.into_inner();
+        let (tx, rx) = mpsc::channel::<Result<NarHashResponse, tonic::Status>>(16);
+
+        let upstream_caches = self.upstream_caches.clone();
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            while let Some(Ok(nar_hash_request)) = in_stream.next().await {
+                let digest = nar_hash_request.digest.clone();
+
+                let client_ref = &client;
+                let digest_ref = &digest;
+
+                let is_upstream =
+                    futures::future::join_all(upstream_caches.iter().map(|cache| async move {
+                        matches!(
+                            cache.has_nar_hash(client_ref, digest_ref.as_slice()).await,
+                            Ok(true)
+                        )
+                    }))
+                    .await
+                    .into_iter()
+                    .any(|x| x);
+
+                let response = NarHashResponse { is_upstream };
+
+                // if receiver dropped, stop processing
+                if tx.send(Ok(response)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let out_stream = ReceiverStream::new(rx);
+        Ok(tonic::Response::new(
+            Box::pin(out_stream) as Self::FilterHashesStream
+        ))
     }
 }

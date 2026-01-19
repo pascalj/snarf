@@ -3,6 +3,8 @@ use futures::{StreamExt, TryStreamExt};
 use clap::{Parser, Subcommand};
 
 use nix_compat::store_path::StorePathRef;
+use snarf::database::nix::LocalPathInfo;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 tonic::include_proto!("snarf.v1");
@@ -73,7 +75,30 @@ async fn add_closure(
     let (blob_service, directory_service, path_info_service) =
         snarf::client::clients(token, &url).await?;
 
-    let elems: Vec<_> = futures::stream::iter(closure.all_path_infos())
+    // TODO: factor the following section into its own function or even module for
+    // uploading.
+    let hashes = closure
+        .all_path_infos()
+        .iter()
+        .map(|p| *p.path.digest())
+        .collect();
+
+    let upstream_flags = flag_upstream_nars(client_cli, hashes).await?;
+    let to_upload: Vec<LocalPathInfo> = closure
+        .all_path_infos()
+        .iter()
+        .zip(upstream_flags.iter())
+        .filter_map(|(p, &is_up)| if is_up { Some(p.clone()) } else { None })
+        .collect();
+
+    info!(
+        "Found {} of {} NAR in upstream caches, uploading {}",
+        to_upload.len(),
+        upstream_flags.len(),
+        upstream_flags.len() - to_upload.len()
+    );
+
+    let elems: Vec<_> = futures::stream::iter(to_upload)
         .map(|elem| {
             let path_info_service = path_info_service.clone();
             async move {
@@ -163,4 +188,33 @@ async fn create_token(client_cli: &ClientCli) -> anyhow::Result<()> {
     println!("{}", response.into_inner().token);
 
     Ok(())
+}
+
+async fn flag_upstream_nars(
+    client_cli: &ClientCli,
+    hashes: Vec<[u8; 20]>,
+) -> anyhow::Result<Vec<bool>> {
+    let mut client = management_service_client::ManagementServiceClient::connect(format!(
+        "grpc+http://{}",
+        client_cli.server_address
+    ))
+    .await?;
+
+    let (tx, rx) = mpsc::channel::<NarHashRequest>(20);
+    tokio::spawn(async move {
+        for h in hashes {
+            if tx.send(NarHashRequest { digest: h.into() }).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let in_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let response = client.filter_hashes(in_stream).await?;
+    let resp_stream = response.into_inner();
+
+    Ok(resp_stream
+        .map_ok(|msg| msg.is_upstream)
+        .try_collect()
+        .await?) // returns Err if any stream item is Err
 }
