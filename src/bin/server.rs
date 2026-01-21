@@ -211,15 +211,14 @@ async fn start_server(
     )
     .with_graceful_shutdown(shutdown);
 
-    services.await?;
-
-    Ok(handle_server_commands(
+    let result = handle_server_commands(
         &db_connection,
         &server_state,
         command_receiver,
         shutdown_sender,
-    )
-    .await)
+    );
+
+    Ok(tokio::join!(result, services).0)
 }
 
 /// Handle internal server commands.
