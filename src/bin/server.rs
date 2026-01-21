@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use clap::Parser;
 
 use snarf::cache::NARCache;
-use snarf::database::snarf::{load_nar_caches, store_server_state};
+use snarf::database::snarf::{DbNARCache, insert_nar_cache, load_nar_caches, store_server_state};
 use snarf::server::ServerCommand;
 use snarf::{
     database::snarf::{connect_database, load_server_state},
@@ -253,6 +253,11 @@ async fn handle_server_commands(
                                 .expect("Sending the shutdown signal");
                             ServerTransition::Shutdown
                 }
+                Some(ServerCommand::AddUpstreamCache { base_url }) => {
+                    let db_nar_cache = DbNARCache { base_url };
+                    insert_nar_cache(db_connection, &db_nar_cache).expect("Inserting the new NAR cache");
+                    ServerTransition::Restart
+                },
                 None => ServerTransition::Restart,
             }
         }

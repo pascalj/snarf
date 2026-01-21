@@ -1,3 +1,4 @@
+use anyhow::bail;
 use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
@@ -21,6 +22,14 @@ enum ClientCommand {
     },
     /// Create a new token on a freshly initialized server
     CreateToken,
+    /// Add an upstream cache server for Snarf to check before uploading
+    AddUpstreamCache {
+        /// The authentication token
+        #[arg(short, long, env = "SNARF_CLIENT_TOKEN", required = true)]
+        token: String,
+        /// The base_url of the upstream cache
+        base_url: String,
+    },
 }
 
 /// CLI arguments for the client
@@ -50,12 +59,11 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
     let client_cli = ClientCli::parse();
 
-    match &client_cli.command {
+    Ok(match &client_cli.command {
         ClientCommand::AddClosure { .. } => add_closure(&client_cli).await?,
         ClientCommand::CreateToken => create_token(&client_cli).await?,
-    }
-
-    Ok(())
+        ClientCommand::AddUpstreamCache { .. } => add_upstream_cache(&client_cli).await?,
+    })
 }
 
 /// Add the closure of a path in the store to the cache. The path can be of arbitrary depth, in any case
@@ -216,5 +224,29 @@ async fn flag_upstream_nars(
     Ok(resp_stream
         .map_ok(|msg| msg.is_upstream)
         .try_collect()
-        .await?) // returns Err if any stream item is Err
+        .await?)
+}
+
+async fn add_upstream_cache(client_cli: &ClientCli) -> anyhow::Result<()> {
+    let mut client = management_service_client::ManagementServiceClient::connect(format!(
+        "grpc+http://{}",
+        client_cli.server_address
+    ))
+    .await?;
+
+    let ClientCommand::AddUpstreamCache { token: _, base_url } = &client_cli.command else {
+        return Ok(());
+    };
+
+    let response = client
+        .add_upstream_cache(tonic::Request::new(AddUpstreamCacheRequest {
+            base_url: base_url.into(),
+        }))
+        .await?;
+
+    if !response.into_inner().success {
+        bail!("Could not add the upstream cache");
+    }
+
+    Ok(())
 }

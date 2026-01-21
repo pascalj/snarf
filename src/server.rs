@@ -17,6 +17,7 @@ tonic::include_proto!("snarf.v1");
 
 pub enum ServerCommand {
     MarkInitialized,
+    AddUpstreamCache { base_url: String },
     Shutdown,
 }
 
@@ -297,9 +298,6 @@ impl ManagementServiceWrapper {
 
 #[tonic::async_trait]
 impl management_service_server::ManagementService for ManagementServiceWrapper {
-    type FilterHashesStream = std::pin::Pin<
-        Box<dyn futures::Stream<Item = Result<NarHashResponse, tonic::Status>> + Send>,
-    >;
     async fn create_client_token(
         &self,
         _: tonic::Request<NewClientTokenRequest>,
@@ -323,6 +321,9 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
                 .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
         }))
     }
+    type FilterHashesStream = std::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<NarHashResponse, tonic::Status>> + Send>,
+    >;
 
     /// Filter hashes whether they need uploading.
     async fn filter_hashes(
@@ -366,5 +367,21 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
         Ok(tonic::Response::new(
             Box::pin(out_stream) as Self::FilterHashesStream
         ))
+    }
+
+    async fn add_upstream_cache(
+        &self,
+        request: tonic::Request<AddUpstreamCacheRequest>,
+    ) -> anyhow::Result<tonic::Response<AddUpstreamCacheResponse>, tonic::Status> {
+        let AddUpstreamCacheRequest { base_url } = request.into_inner();
+
+        self.command_channel
+            .send(ServerCommand::AddUpstreamCache { base_url })
+            .await
+            .map_err(|_| tonic::Status::internal("Unable to mark initialized"))?;
+
+        Ok(tonic::Response::new(AddUpstreamCacheResponse {
+            success: true,
+        }))
     }
 }

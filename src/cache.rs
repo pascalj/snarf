@@ -1,4 +1,5 @@
 use reqwest::Client;
+use tracing::debug;
 
 use crate::database::snarf::DbNARCache;
 
@@ -25,6 +26,7 @@ impl NARCache {
             nix_compat::nixbase32::encode(nar_hash)
         );
 
+        debug!("Checking narinfo {} for existence", url);
         Ok(client.head(&url).send().await?.status().is_success())
     }
 }

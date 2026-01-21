@@ -13,6 +13,7 @@ message NewClientTokenRequest {
 service ManagementService {
   rpc CreateClientToken(NewClientTokenRequest) returns (ClientToken) {}
   rpc FilterHashes(stream NARHashRequest) returns (stream NARHashResponse);
+  rpc AddUpstreamCache(AddUpstreamCacheRequest) returns (AddUpstreamCacheResponse);
 }
 
 message NARHashRequest {
@@ -21,4 +22,12 @@ message NARHashRequest {
 
 message NARHashResponse {
   bool isUpstream = 1;
+}
+
+message AddUpstreamCacheRequest {
+  string base_url = 1;
+}
+
+message AddUpstreamCacheResponse {
+  bool success = 1;
 }
