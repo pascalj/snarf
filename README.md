@@ -16,7 +16,7 @@ The project is not ready for production use, but it is functional as a basic cac
 - [ ] Display, manage and delete store data with the client
 - [ ] Support of Snix' experimental store configuration
 - [ ] Garbage collection and caching policies
-- [ ] Upstream caches similar to attic
+- [x] Upstream caches similar to attic
 - [ ] Provide statistics
 
 ## Usage
