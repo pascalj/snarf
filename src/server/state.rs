@@ -1,9 +1,9 @@
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, RwLock, atomic::AtomicBool};
 
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 
-use crate::database::snarf::{DbServerState, store_server_state};
+use crate::database::snarf::store_server_state;
 use crate::keys::{CacheKey, PasetoKey};
 use crate::server::services::ServerCommand;
 
@@ -49,19 +49,14 @@ pub mod persistence {
     /// Construct a [DbServerState] for serialization.
     pub fn to_database_state(server_state: &ServerState) -> DbServerState {
         DbServerState {
-            paseto_key_bytes: server_state
-                .paseto_key
-                .blocking_read()
-                .to_keypair_bytes()
-                .into(),
+            paseto_key_bytes: server_state.paseto_key().to_keypair_bytes().into(),
             cache_key_bytes: server_state
-                .cache_key
-                .blocking_read()
+                .cache_key()
                 .signing_key()
                 .to_keypair_bytes()
                 .into(),
             initialized: server_state.initialized.load(Ordering::SeqCst),
-            name: server_state.cache_key.blocking_read().name.clone(),
+            name: server_state.cache_key().name.clone(),
         }
     }
 }
@@ -83,17 +78,20 @@ impl From<&ServerState> for crate::database::snarf::DbServerState {
 impl ServerState {
     /// Get the server's keypair as bytes. This is used for the authentication.
     pub fn key_bytes(&self) -> [u8; 64] {
-        self.paseto_key.blocking_read().to_keypair_bytes()
+        self.paseto_key
+            .read()
+            .expect("Failed to lock")
+            .to_keypair_bytes()
     }
 
     /// Return the [PasetoKey] for this server's state.
     pub fn paseto_key(&self) -> PasetoKey {
-        self.paseto_key.blocking_read().clone()
+        self.paseto_key.read().expect("Failed to lock").clone()
     }
 
     /// Get the Nix cache's key. This one is used to sign the NARs.
     pub fn cache_key(&self) -> CacheKey {
-        self.cache_key.blocking_read().clone()
+        self.cache_key.read().expect("Failed to lock").clone()
     }
 
     /// Initialize the server. Once initialized, `create-token` is a noop and

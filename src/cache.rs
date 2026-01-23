@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use reqwest::Client;
-use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::database::snarf::DbNARCache;
+use crate::database::snarf::{DbNARCache, insert_nar_cache};
 
 /// Represents an upstream NAR cache.
 ///
@@ -20,18 +21,22 @@ pub enum UpstreamCacheCommand {
 
 #[derive(Clone)]
 pub struct UpstreamCaches {
-    nar_caches: Arc<RwLock<Vec<NARCache>>>,
+    nar_caches: Arc<ArcSwap<Vec<NARCache>>>,
 }
 
 impl UpstreamCaches {
     pub fn new(nar_caches: Vec<NARCache>) -> Self {
         Self {
-            nar_caches: Arc::new(nar_caches.into()),
+            nar_caches: Arc::new(ArcSwap::from(Arc::new(nar_caches))),
         }
     }
 
-    pub fn caches(&self) -> Arc<RwLock<Vec<NARCache>>> {
-        self.nar_caches.clone()
+    pub fn caches(&self) -> Arc<Vec<NARCache>> {
+        self.nar_caches.load_full()
+    }
+
+    pub fn replace_caches(&self, new_caches: Vec<NARCache>) {
+        self.nar_caches.store(Arc::new(new_caches));
     }
 }
 
@@ -86,5 +91,23 @@ impl TryFrom<&DbNARCache> for NARCache {
 impl From<&NARCache> for DbNARCache {
     fn from(value: &NARCache) -> Self {
         persistence::to_database(value)
+    }
+}
+
+pub async fn handle_cache_commands(
+    db_connection: &rusqlite::Connection,
+    upstream_caches: &UpstreamCaches,
+    mut command_receiver: mpsc::Receiver<UpstreamCacheCommand>,
+) {
+    while let Some(command) = command_receiver.recv().await {
+        match command {
+            UpstreamCacheCommand::Add { base_url } => {
+                let cache = NARCache::new(&base_url);
+                let mut new_caches = upstream_caches.caches().to_vec();
+                new_caches.push(cache.clone());
+                upstream_caches.replace_caches(new_caches);
+                insert_nar_cache(db_connection, &(&cache).into()).expect("Cache insertion failed.");
+            }
+        }
     }
 }

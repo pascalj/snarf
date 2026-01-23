@@ -150,7 +150,7 @@ async fn start_server(
                 server_command_tx,
                 cache_command_tx,
                 server_state.clone(),
-                upstream_caches,
+                upstream_caches.clone(),
             ),
         ),
     );
@@ -193,13 +193,16 @@ async fn start_server(
     )
     .with_graceful_shutdown(shutdown_signal());
 
-    let result = snarf::server::state::handle_server_commands(
+    let server_result = snarf::server::state::handle_server_commands(
         &db_connection,
         &server_state,
         server_command_rx,
     );
 
-    tokio::join!(result, services).1?;
+    let cache_result =
+        snarf::cache::handle_cache_commands(&db_connection, &upstream_caches, cache_command_rx);
+
+    tokio::join!(server_result, cache_result, services).2?;
 
     Ok(())
 }

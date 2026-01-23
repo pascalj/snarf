@@ -232,7 +232,7 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
         let mut in_stream = request.into_inner();
         let (tx, rx) = mpsc::channel::<Result<NarHashResponse, tonic::Status>>(16);
 
-        let upstream_caches = self.upstream_caches.clone();
+        let upstream_caches = self.upstream_caches.caches();
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -243,14 +243,12 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
                 let digest_ref = &digest;
 
                 let is_upstream =
-                    futures::future::join_all(upstream_caches.caches().blocking_read().iter().map(
-                        |cache| async move {
-                            matches!(
-                                cache.has_nar_hash(client_ref, digest_ref.as_slice()).await,
-                                Ok(true)
-                            )
-                        },
-                    ))
+                    futures::future::join_all(upstream_caches.iter().map(|cache| async move {
+                        matches!(
+                            cache.has_nar_hash(client_ref, digest_ref.as_slice()).await,
+                            Ok(true)
+                        )
+                    }))
                     .await
                     .into_iter()
                     .any(|x| x);
