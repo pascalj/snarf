@@ -1,3 +1,8 @@
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::AtomicBool};
+
+use tokio::sync::RwLock;
+
 use crate::keys::{CacheKey, PasetoKey};
 
 /// State that is needed to perform operations on the PASETO tokens.
@@ -5,17 +10,19 @@ use crate::keys::{CacheKey, PasetoKey};
 pub struct ServerState {
     /// The underlying signing key bytes. First 32 bytes are private key, remaining 32 bytes are the public key.
     /// We use ed25519-dalek SigningKey here and just dynamically create the PasetoAsymmetric keys.
-    paseto_key: PasetoKey,
+    paseto_key: Arc<RwLock<PasetoKey>>,
 
     /// The key that is used for signing the narinfo.
-    cache_key: CacheKey,
+    cache_key: Arc<RwLock<CacheKey>>,
 
     /// Whether the server was initialized. An uninitialized server may create tokens
     /// for unauthorized users to make the setup easier.
-    initialized: bool,
+    initialized: Arc<AtomicBool>,
 }
 
 pub mod persistence {
+    use super::*;
+
     use crate::database::snarf::DbServerState;
     use crate::keys::{CacheKey, PasetoKey};
 
@@ -23,30 +30,36 @@ pub mod persistence {
 
     /// Try to construct a ServerState from a deserialized [DbServerState]
     pub fn from_database_state(db_state: DbServerState) -> anyhow::Result<ServerState> {
-        let paseto_key =
-            PasetoKey::from_keypair_bytes(db_state.paseto_key_bytes.as_slice().try_into()?)?;
-        let cache_key = CacheKey::with_signing_key(
+        let paseto_key = Arc::new(RwLock::new(PasetoKey::from_keypair_bytes(
+            db_state.paseto_key_bytes.as_slice().try_into()?,
+        )?));
+        let cache_key = Arc::new(RwLock::new(CacheKey::with_signing_key(
             &db_state.name,
             db_state.cache_key_bytes.as_slice().try_into()?,
-        )?;
+        )?));
         Ok(ServerState {
             paseto_key,
             cache_key,
-            initialized: db_state.initialized,
+            initialized: Arc::new(db_state.initialized.into()),
         })
     }
 
     /// Construct a [DbServerState] for serialization.
     pub fn to_database_state(server_state: &ServerState) -> DbServerState {
         DbServerState {
-            paseto_key_bytes: server_state.paseto_key.to_keypair_bytes().into(),
+            paseto_key_bytes: server_state
+                .paseto_key
+                .blocking_read()
+                .to_keypair_bytes()
+                .into(),
             cache_key_bytes: server_state
                 .cache_key
+                .blocking_read()
                 .signing_key()
                 .to_keypair_bytes()
                 .into(),
-            initialized: server_state.initialized,
-            name: server_state.cache_key.name.clone(),
+            initialized: server_state.initialized.load(Ordering::SeqCst),
+            name: server_state.cache_key.blocking_read().name.clone(),
         }
     }
 }
@@ -68,28 +81,28 @@ impl From<&ServerState> for crate::database::snarf::DbServerState {
 impl ServerState {
     /// Get the server's keypair as bytes. This is used for the authentication.
     pub fn key_bytes(&self) -> [u8; 64] {
-        self.paseto_key.to_keypair_bytes()
+        self.paseto_key.blocking_read().to_keypair_bytes()
     }
 
     /// Return the [PasetoKey] for this server's state.
     pub fn paseto_key(&self) -> PasetoKey {
-        self.paseto_key.clone()
+        self.paseto_key.blocking_read().clone()
     }
 
     /// Get the Nix cache's key. This one is used to sign the NARs.
     pub fn cache_key(&self) -> CacheKey {
-        self.cache_key.clone()
+        self.cache_key.blocking_read().clone()
     }
 
     /// Initialize the server. Once initialized, `create-token` is a noop and
     /// will not reveal the initial token.
     pub fn initialize(&mut self) {
-        self.initialized = true;
+        self.initialized = Arc::new(true.into());
     }
 
     /// Returns whether the server has been initialized.
     pub fn is_initialized(&self) -> bool {
-        self.initialized
+        self.initialized.load(Ordering::SeqCst)
     }
 }
 
@@ -97,12 +110,12 @@ impl Default for ServerState {
     /// Create a new server from scratch. This is typically only useful for testing
     /// or the very first startup, since it generates new keys.
     fn default() -> Self {
-        let cache_key = CacheKey::new("snarf");
-        let paseto_key = PasetoKey::default();
+        let cache_key = Arc::new(CacheKey::new("snarf").into());
+        let paseto_key = Arc::new(PasetoKey::default().into());
         Self {
             cache_key,
             paseto_key,
-            initialized: false,
+            initialized: Arc::new(false.into()),
         }
     }
 }
