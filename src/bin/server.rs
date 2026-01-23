@@ -4,10 +4,12 @@ use clap::Parser;
 
 use snarf::cache::NARCache;
 use snarf::database::snarf::{DbNARCache, insert_nar_cache, load_nar_caches, store_server_state};
-use snarf::server::ServerCommand;
 use snarf::{
     database::snarf::{connect_database, load_server_state},
-    server::{LazySigningPathInfoService, ServerState},
+    server::{
+        services::{LazySigningPathInfoService, ServerCommand},
+        state::ServerState,
+    },
 };
 
 use tokio::sync::mpsc;
@@ -151,7 +153,7 @@ async fn start_server(
 
     // The management channels are used to fill the cache and potentially to configure
     // it, authenticated.
-    let management_routes = snarf::server::server_routes(
+    let management_routes = snarf::server::services::server_routes(
         &server_state,
         blob_service.clone(),
         directory_service.clone(),
@@ -159,8 +161,8 @@ async fn start_server(
         nar_calculation_service,
     )
     .add_service(
-        snarf::server::management_service_server::ManagementServiceServer::new(
-            snarf::server::ManagementServiceWrapper::new(
+        snarf::server::services::management_service_server::ManagementServiceServer::new(
+            snarf::server::services::ManagementServiceWrapper::new(
                 &command_sender,
                 &server_state.paseto_key(),
                 upstream_caches,
@@ -204,7 +206,6 @@ async fn start_server(
         info!("Press Cltr-C for graceful shutdown.");
         shutdown_receiver.recv().await;
     };
-    // _= tokio::signal::ctrl_c() => { }
     let services = tokio_listener::axum07::serve(
         listener.unwrap(),
         app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
