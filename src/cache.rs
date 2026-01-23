@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use reqwest::Client;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::database::snarf::DbNARCache;
@@ -9,6 +12,27 @@ use crate::database::snarf::DbNARCache;
 #[derive(Clone)]
 pub struct NARCache {
     base_url: String,
+}
+
+pub enum UpstreamCacheCommand {
+    Add { base_url: String },
+}
+
+#[derive(Clone)]
+pub struct UpstreamCaches {
+    nar_caches: Arc<RwLock<Vec<NARCache>>>,
+}
+
+impl UpstreamCaches {
+    pub fn new(nar_caches: Vec<NARCache>) -> Self {
+        Self {
+            nar_caches: Arc::new(nar_caches.into()),
+        }
+    }
+
+    pub fn caches(&self) -> Arc<RwLock<Vec<NARCache>>> {
+        self.nar_caches.clone()
+    }
 }
 
 impl NARCache {

@@ -88,7 +88,7 @@ pub fn remove_nar_cache(connection: &Connection, base_url: &str) -> Result<usize
 
 #[cfg(test)]
 mod tests {
-    use crate::server::ServerState;
+    use crate::server::state::ServerState;
 
     use super::*;
 

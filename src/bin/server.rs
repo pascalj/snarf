@@ -2,8 +2,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
-use snarf::cache::NARCache;
-use snarf::database::snarf::{DbNARCache, insert_nar_cache, load_nar_caches, store_server_state};
+use snarf::cache::{NARCache, UpstreamCacheCommand, UpstreamCaches};
+use snarf::database::snarf::{load_nar_caches, store_server_state};
 use snarf::{
     database::snarf::{connect_database, load_server_state},
     server::{
@@ -95,27 +95,9 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
         .init();
 
     let arguments = Arguments::parse();
-
-    loop {
-        if let ServerTransition::Shutdown = start_server(&arguments).await? {
-            break;
-        };
-    }
+    start_server(&arguments).await?;
 
     Ok(())
-}
-
-/// The new state of the main loop.
-enum ServerTransition {
-    Shutdown,
-    Restart,
-}
-
-/// The signal to shutdown the server.
-///
-/// This is supposed to be send to axum to perform a graceful shutdown on request.
-enum ShutdownCommand {
-    Shutdown,
 }
 
 /// Start the actual server handling incoming client connections.
@@ -124,7 +106,7 @@ enum ShutdownCommand {
 /// for example for restarting or shutdding down the server
 async fn start_server(
     arguments: &Arguments,
-) -> anyhow::Result<ServerTransition, Box<dyn std::error::Error + Send + Sync>> {
+) -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let db_connection = connect_database(arguments.state_directory.as_path().join("snarf.sqlite"))?;
     let server_state = match load_server_state(&db_connection)? {
         Some(server_state) => ServerState::try_from(server_state)?,
@@ -134,13 +116,15 @@ async fn start_server(
             default_state
         }
     };
-    let upstream_caches = load_nar_caches(&db_connection)?
-        .iter()
-        .map(NARCache::try_from)
-        .collect::<anyhow::Result<_>>()?;
+    let upstream_caches = UpstreamCaches::new(
+        load_nar_caches(&db_connection)?
+            .iter()
+            .map(NARCache::try_from)
+            .collect::<anyhow::Result<_>>()?,
+    );
 
-    let (command_sender, command_receiver) = mpsc::channel::<ServerCommand>(8);
-    let (shutdown_sender, mut shutdown_receiver) = mpsc::channel::<ShutdownCommand>(1);
+    let (server_command_tx, server_command_rx) = mpsc::channel::<ServerCommand>(8);
+    let (cache_command_tx, cache_command_rx) = mpsc::channel::<UpstreamCacheCommand>(8);
 
     let (blob_service, directory_service, path_info_service, nar_calculation_service) =
         snix_store::utils::construct_services(arguments.service_addrs.clone()).await?;
@@ -163,10 +147,10 @@ async fn start_server(
     .add_service(
         snarf::server::services::management_service_server::ManagementServiceServer::new(
             snarf::server::services::ManagementServiceWrapper::new(
-                &command_sender,
-                &server_state.paseto_key(),
+                server_command_tx,
+                cache_command_tx,
+                server_state.clone(),
                 upstream_caches,
-                server_state.is_initialized(),
             ),
         ),
     );
@@ -202,66 +186,46 @@ async fn start_server(
     .await;
 
     info!(listen_address=%listen_address, "starting daemon");
-    let shutdown = async move {
-        info!("Press Cltr-C for graceful shutdown.");
-        shutdown_receiver.recv().await;
-    };
+
     let services = tokio_listener::axum07::serve(
         listener.unwrap(),
         app.into_make_service_with_connect_info::<tokio_listener::SomeSocketAddrClonable>(),
     )
-    .with_graceful_shutdown(shutdown);
+    .with_graceful_shutdown(shutdown_signal());
 
-    let result = handle_server_commands(
+    let result = snarf::server::state::handle_server_commands(
         &db_connection,
         &server_state,
-        command_receiver,
-        shutdown_sender,
+        server_command_rx,
     );
 
-    Ok(tokio::join!(result, services).0)
+    tokio::join!(result, services).1?;
+
+    Ok(())
 }
 
-/// Handle internal server commands.
-///
-/// This can update the server state and then pass the shutdown/restart commands
-/// on to axum, so that it reloads the services with the new state.
-async fn handle_server_commands(
-    db_connection: &rusqlite::Connection,
-    server_state: &ServerState,
-    mut command_receiver: mpsc::Receiver<ServerCommand>,
-    shutdown_sender: mpsc::Sender<ShutdownCommand>,
-) -> ServerTransition {
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal;
+
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
     tokio::select! {
-        command = command_receiver.recv() => {
-            match command {
-                Some(ServerCommand::MarkInitialized) => {
-                     let mut new_state = server_state.clone();
-                     new_state.initialize();
-                     let db_server_state = snarf::database::snarf::DbServerState::from(&new_state);
-                    store_server_state(db_connection, &db_server_state)
-                                .expect("Updating the server state");
-                    shutdown_sender
-                                .send(ShutdownCommand::Shutdown)
-                                .await
-                                .expect("Sending the shutdown signal");
-                            ServerTransition::Restart
-                },
-                Some(ServerCommand::Shutdown) => {
-                    shutdown_sender
-                            .send(ShutdownCommand::Shutdown)
-                                .await
-                                .expect("Sending the shutdown signal");
-                            ServerTransition::Shutdown
-                }
-                Some(ServerCommand::AddUpstreamCache { base_url }) => {
-                    let db_nar_cache = DbNARCache { base_url };
-                    insert_nar_cache(db_connection, &db_nar_cache).expect("Inserting the new NAR cache");
-                    ServerTransition::Restart
-                },
-                None => ServerTransition::Restart,
-            }
-        }
-        _ = tokio::signal::ctrl_c() => ServerTransition::Shutdown
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }

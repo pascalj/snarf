@@ -8,7 +8,7 @@ use tokio_stream::StreamExt;
 use tonic::async_trait;
 
 use crate::{
-    cache::NARCache,
+    cache::{UpstreamCacheCommand, UpstreamCaches},
     keys::{CacheKey, PasetoKey},
     server::state::ServerState,
 };
@@ -26,8 +26,6 @@ struct PasetoAuthInterceptor {
 
 pub enum ServerCommand {
     MarkInitialized,
-    AddUpstreamCache { base_url: String },
-    Shutdown,
 }
 
 impl From<&PasetoKey> for PasetoAuthInterceptor {
@@ -174,24 +172,24 @@ pub fn server_routes(
 }
 
 pub struct ManagementServiceWrapper {
-    initialized: bool,
-    paseto_key: PasetoKey,
-    upstream_caches: Vec<NARCache>,
-    command_channel: mpsc::Sender<ServerCommand>,
+    server_commands_tx: mpsc::Sender<ServerCommand>,
+    cache_commands_tx: mpsc::Sender<UpstreamCacheCommand>,
+    server_state: ServerState,
+    upstream_caches: UpstreamCaches,
 }
 
 impl ManagementServiceWrapper {
     pub fn new(
-        command_channel: &mpsc::Sender<ServerCommand>,
-        paseto_key: &PasetoKey,
-        upstream_caches: Vec<NARCache>,
-        initialized: bool,
+        server_commands_tx: mpsc::Sender<ServerCommand>,
+        cache_commands_tx: mpsc::Sender<UpstreamCacheCommand>,
+        server_state: ServerState,
+        upstream_caches: UpstreamCaches,
     ) -> Self {
         Self {
-            initialized,
-            paseto_key: paseto_key.clone(),
+            server_commands_tx,
+            cache_commands_tx,
+            server_state,
             upstream_caches,
-            command_channel: command_channel.clone(),
         }
     }
 }
@@ -203,20 +201,21 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
         _: tonic::Request<NewClientTokenRequest>,
     ) -> anyhow::Result<tonic::Response<ClientToken>, tonic::Status> {
         // TODO: check token
-        if self.initialized {
+        if self.server_state.is_initialized() {
             return Err(tonic::Status::permission_denied(
                 "Server is already initialized",
             ));
         }
 
-        self.command_channel
+        self.server_commands_tx
             .send(ServerCommand::MarkInitialized)
             .await
             .map_err(|_| tonic::Status::internal("Unable to mark initialized"))?;
 
         Ok(tonic::Response::new(ClientToken {
             token: self
-                .paseto_key
+                .server_state
+                .paseto_key()
                 .public_token()
                 .map_err(|_| tonic::Status::internal("Unable to generate token from state"))?,
         }))
@@ -244,12 +243,14 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
                 let digest_ref = &digest;
 
                 let is_upstream =
-                    futures::future::join_all(upstream_caches.iter().map(|cache| async move {
-                        matches!(
-                            cache.has_nar_hash(client_ref, digest_ref.as_slice()).await,
-                            Ok(true)
-                        )
-                    }))
+                    futures::future::join_all(upstream_caches.caches().blocking_read().iter().map(
+                        |cache| async move {
+                            matches!(
+                                cache.has_nar_hash(client_ref, digest_ref.as_slice()).await,
+                                Ok(true)
+                            )
+                        },
+                    ))
                     .await
                     .into_iter()
                     .any(|x| x);
@@ -275,8 +276,8 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
     ) -> anyhow::Result<tonic::Response<AddUpstreamCacheResponse>, tonic::Status> {
         let AddUpstreamCacheRequest { base_url } = request.into_inner();
 
-        self.command_channel
-            .send(ServerCommand::AddUpstreamCache { base_url })
+        self.cache_commands_tx
+            .send(UpstreamCacheCommand::Add { base_url })
             .await
             .map_err(|_| tonic::Status::internal("Unable to mark initialized"))?;
 

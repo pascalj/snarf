@@ -1,9 +1,11 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, atomic::AtomicBool};
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 
+use crate::database::snarf::{DbServerState, store_server_state};
 use crate::keys::{CacheKey, PasetoKey};
+use crate::server::services::ServerCommand;
 
 /// State that is needed to perform operations on the PASETO tokens.
 #[derive(Clone)]
@@ -96,8 +98,8 @@ impl ServerState {
 
     /// Initialize the server. Once initialized, `create-token` is a noop and
     /// will not reveal the initial token.
-    pub fn initialize(&mut self) {
-        self.initialized = Arc::new(true.into());
+    pub fn initialize(&self) {
+        self.initialized.swap(true, Ordering::SeqCst);
     }
 
     /// Returns whether the server has been initialized.
@@ -116,6 +118,30 @@ impl Default for ServerState {
             cache_key,
             paseto_key,
             initialized: Arc::new(false.into()),
+        }
+    }
+}
+
+/// Handle internal server state update commands.
+///
+/// This can update the server state and then pass the shutdown/restart commands
+/// on to axum, so that it reloads the services with the new state.
+pub async fn handle_server_commands(
+    db_connection: &rusqlite::Connection,
+    server_state: &ServerState,
+    mut command_receiver: mpsc::Receiver<super::services::ServerCommand>,
+) {
+    while let Some(command) = command_receiver.recv().await {
+        handle_command(server_state, &command);
+        store_server_state(db_connection, &server_state.into())
+            .expect("Server state update failed. Crashing to protect from inconsistencies.");
+    }
+}
+
+fn handle_command(server_state: &ServerState, server_command: &ServerCommand) {
+    match server_command {
+        ServerCommand::MarkInitialized => {
+            server_state.initialize();
         }
     }
 }
