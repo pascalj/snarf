@@ -32,6 +32,12 @@ enum ClientCommand {
         /// The base_url of the upstream cache
         base_url: String,
     },
+    /// List all configured upstream caches
+    ListUpstreamCaches {
+        /// The authentication token
+        #[arg(short, long, env = "SNARF_CLIENT_TOKEN", required = true)]
+        token: String,
+    },
 }
 
 /// CLI arguments for the client
@@ -61,11 +67,14 @@ async fn main() -> anyhow::Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
     let client_cli = ClientCli::parse();
 
-    Ok(match &client_cli.command {
+    match &client_cli.command {
         ClientCommand::AddClosure { .. } => add_closure(&client_cli).await?,
         ClientCommand::CreateToken => create_token(&client_cli).await?,
         ClientCommand::AddUpstreamCache { .. } => add_upstream_cache(&client_cli).await?,
-    })
+        ClientCommand::ListUpstreamCaches { .. } => list_upstream_caches(&client_cli).await?,
+    };
+
+    Ok(())
 }
 
 /// Add the closure of a path in the store to the cache. The path can be of arbitrary depth, in any case
@@ -238,6 +247,23 @@ async fn add_upstream_cache(client_cli: &ClientCli) -> anyhow::Result<()> {
 
     if !response.into_inner().success {
         bail!("Could not add the upstream cache");
+    }
+
+    Ok(())
+}
+
+async fn list_upstream_caches(client_cli: &ClientCli) -> anyhow::Result<()> {
+    let ClientCommand::ListUpstreamCaches { token } = &client_cli.command else {
+        bail!("Upstream cache called with the wrong command");
+    };
+
+    let response = get_client(&client_cli.server_address, Some(token))
+        .await?
+        .list_upstream_caches(tonic::Request::new(ListUpstreamCachesRequest {}))
+        .await?;
+
+    for base_url in response.into_inner().base_urls {
+        println!("{}", base_url);
     }
 
     Ok(())

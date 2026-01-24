@@ -58,6 +58,10 @@ impl NARCache {
         debug!("Checking narinfo {} for existence", url);
         Ok(client.head(&url).send().await?.status().is_success())
     }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
 }
 
 pub mod persistence {

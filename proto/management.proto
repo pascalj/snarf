@@ -14,7 +14,8 @@ service ManagementService {
   rpc CreateClientToken(NewClientTokenRequest) returns (ClientToken) {}
   rpc FilterHashes(stream NARHashRequest) returns (stream NARHashResponse);
   rpc AddUpstreamCache(AddUpstreamCacheRequest) returns (AddUpstreamCacheResponse);
-}
+  rpc ListUpstreamCaches(ListUpstreamCachesRequest) returns (ListUpstreamCachesResponse);
+ }
 
 message NARHashRequest {
   bytes digest = 1;
@@ -30,4 +31,10 @@ message AddUpstreamCacheRequest {
 
 message AddUpstreamCacheResponse {
   bool success = 1;
+}
+
+message ListUpstreamCachesRequest {}
+
+message ListUpstreamCachesResponse {
+  repeated string base_urls = 1;
 }

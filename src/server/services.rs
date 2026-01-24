@@ -283,4 +283,18 @@ impl management_service_server::ManagementService for ManagementServiceWrapper {
             success: true,
         }))
     }
+
+    async fn list_upstream_caches(
+        &self,
+        _: tonic::Request<ListUpstreamCachesRequest>,
+    ) -> anyhow::Result<tonic::Response<ListUpstreamCachesResponse>, tonic::Status> {
+        Ok(tonic::Response::new(ListUpstreamCachesResponse {
+            base_urls: self
+                .upstream_caches
+                .caches()
+                .iter()
+                .map(|cache| cache.base_url().to_owned())
+                .collect(),
+        }))
+    }
 }
