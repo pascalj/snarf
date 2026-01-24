@@ -129,7 +129,8 @@
             snarf.wait_for_unit("default.target")
 
             snarf.succeed('export SNARF_CLIENT_TOKEN=$(snarf -s snarfd:9000 create-token); \
-            snarf -s snarfd:9000 add-closure --token $SNARF_CLIENT_TOKEN $(realpath $(which snarf))')
+              snarf -s snarfd:9000 add-upstream-cache --token $SNARF_CLIENT_TOKEN "https://cache.nixos.org"; \
+              snarf -s snarfd:9000 add-closure --token $SNARF_CLIENT_TOKEN $(realpath $(which snarf))')
           '';
         };
       });
