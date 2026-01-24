@@ -96,7 +96,7 @@ async fn add_closure(
         .all_path_infos()
         .iter()
         .zip(upstream_flags.iter())
-        .filter_map(|(p, &is_up)| if is_up { Some(p.clone()) } else { None })
+        .filter_map(|(p, &is_up)| if !is_up { Some(p.clone()) } else { None })
         .collect();
 
     info!(
