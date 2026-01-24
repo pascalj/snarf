@@ -11,7 +11,7 @@ tonic::include_proto!("snarf.v1");
 /// Responsible for adding the bearer token from a Paseto token on the
 /// client side.
 #[derive(Clone)]
-struct ClientPasetoTokenInterceptor {
+pub struct ClientPasetoTokenInterceptor {
     token: String,
 }
 

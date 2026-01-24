@@ -1,10 +1,12 @@
+use std::str::FromStr;
+
 use anyhow::bail;
 use futures::{StreamExt, TryStreamExt};
 
 use clap::{Parser, Subcommand};
 
 use nix_compat::store_path::StorePathRef;
-use snarf::database::nix::LocalPathInfo;
+use snarf::{client::ClientPasetoTokenInterceptor, database::nix::LocalPathInfo};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -182,16 +184,13 @@ async fn add_closure(
 }
 
 async fn create_token(client_cli: &ClientCli) -> anyhow::Result<()> {
-    let mut client = management_service_client::ManagementServiceClient::connect(format!(
-        "grpc+http://{}",
-        client_cli.server_address
-    ))
-    .await?;
-
     let request = tonic::Request::new(NewClientTokenRequest {
         capabilities: vec![],
     });
-    let response = client.create_client_token(request).await?;
+    let response = get_client(&client_cli.server_address, None)
+        .await?
+        .create_client_token(request)
+        .await?;
 
     println!("{}", response.into_inner().token);
 
@@ -202,12 +201,6 @@ async fn flag_upstream_nars(
     client_cli: &ClientCli,
     hashes: Vec<[u8; 20]>,
 ) -> anyhow::Result<Vec<bool>> {
-    let mut client = management_service_client::ManagementServiceClient::connect(format!(
-        "grpc+http://{}",
-        client_cli.server_address
-    ))
-    .await?;
-
     let (tx, rx) = mpsc::channel::<NarHashRequest>(20);
     tokio::spawn(async move {
         for h in hashes {
@@ -218,7 +211,11 @@ async fn flag_upstream_nars(
     });
 
     let in_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let response = client.filter_hashes(in_stream).await?;
+    let response = get_client(&client_cli.server_address, None)
+        .await?
+        .filter_hashes(in_stream)
+        .await?;
+
     let resp_stream = response.into_inner();
 
     Ok(resp_stream
@@ -228,17 +225,12 @@ async fn flag_upstream_nars(
 }
 
 async fn add_upstream_cache(client_cli: &ClientCli) -> anyhow::Result<()> {
-    let mut client = management_service_client::ManagementServiceClient::connect(format!(
-        "grpc+http://{}",
-        client_cli.server_address
-    ))
-    .await?;
-
-    let ClientCommand::AddUpstreamCache { token: _, base_url } = &client_cli.command else {
-        return Ok(());
+    let ClientCommand::AddUpstreamCache { token, base_url } = &client_cli.command else {
+        bail!("Upstream cache called with the wrong command");
     };
 
-    let response = client
+    let response = get_client(&client_cli.server_address, Some(token))
+        .await?
         .add_upstream_cache(tonic::Request::new(AddUpstreamCacheRequest {
             base_url: base_url.into(),
         }))
@@ -249,4 +241,31 @@ async fn add_upstream_cache(client_cli: &ClientCli) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Get a client to connect to the server at server_address.
+///
+/// An optional token can be passed to authenticate the requests.
+async fn get_client(
+    server_address: &str,
+    token: Option<&str>,
+) -> anyhow::Result<
+    management_service_client::ManagementServiceClient<
+        tonic::service::interceptor::InterceptedService<
+            tonic::transport::Channel,
+            ClientPasetoTokenInterceptor,
+        >,
+    >,
+> {
+    let url = format!("grpc+http://{}", server_address);
+    let channel = tonic::transport::Endpoint::from_str(url.as_ref())?
+        .connect()
+        .await?;
+
+    Ok(
+        management_service_client::ManagementServiceClient::with_interceptor(
+            channel,
+            ClientPasetoTokenInterceptor::from(token.unwrap_or_default()),
+        ),
+    )
 }
