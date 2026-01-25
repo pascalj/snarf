@@ -1,0 +1,10 @@
+when:
+  - event: push
+
+steps:
+  - name: flake-check
+    image: nixos/nix:latest
+    commands:
+      - echo "system-features = nixos-test benchmark big-parallel kvm" >> /etc/nix/nix.conf
+      - echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+      - nix flake check -L
